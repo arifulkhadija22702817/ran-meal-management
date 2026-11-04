@@ -36,13 +36,9 @@ service cloud.firestore {
              get(messPath).data.managerUid == request.auth.uid;
     }
 
-    // Mess Read Authorization: Manager or Authorized Member
+    // Mess Read Authorization: Any signed-in user can read mess state
     function isMessAuthorized(messId) {
-      let messPath = /databases/$(database)/documents/messes/$(messId);
-      return isSignedIn() && exists(messPath) && (
-        get(messPath).data.managerUid == request.auth.uid ||
-        exists(/databases/$(database)/documents/messes/$(messId)/authorized_members/$(request.auth.uid))
-      );
+      return isSignedIn();
     }
 
     function isValidMess(data) {
@@ -191,10 +187,10 @@ service cloud.firestore {
                        incoming().managerUid == request.auth.uid &&
                        incoming().managerEmail.lower() == request.auth.token.email.lower();
 
-      // Mess updates: Restricted to current manager OR initial unassigned manager claim
+      // Mess updates: Restricted to current manager OR initial/registered manager claim
       allow update: if isSignedIn() && isValidId(messId) && isValidMess(incoming()) && (
                        isCurrentMessManager(messId) ||
-                       ((!('managerUid' in existing()) || existing().managerUid == "" || existing().managerUid == "manager_placeholder" || !('managerEmail' in existing()) || existing().managerEmail == "") &&
+                       ((!('managerUid' in existing()) || existing().managerUid == "" || existing().managerUid == "manager_placeholder" || !('managerEmail' in existing()) || existing().managerEmail == "" || existing().managerEmail.lower() == request.auth.token.email.lower()) &&
                         incoming().managerUid == request.auth.uid &&
                         incoming().managerEmail.lower() == request.auth.token.email.lower())
                      );

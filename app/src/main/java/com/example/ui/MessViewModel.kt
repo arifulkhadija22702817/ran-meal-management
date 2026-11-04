@@ -235,9 +235,97 @@ class MessViewModel(
     }
 
     fun isUserAdmin(mess: Mess?): Boolean {
+        if (!_isAdminAuthenticated.value) return false
         val uid = repository.getCurrentUserUid() ?: return false
-        val managerUid = mess?.managerUid ?: return false
-        return uid.isNotEmpty() && uid == managerUid && _isAdminAuthenticated.value
+        val userEmail = repository.auth.currentUser?.email?.trim()?.lowercase() ?: ""
+        val managerUid = mess?.managerUid ?: ""
+        val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
+
+        val isUidMatch = uid.isNotEmpty() && uid == managerUid
+        val isEmailMatch = userEmail.isNotEmpty() && managerEmail.isNotEmpty() && userEmail == managerEmail
+
+        if (isEmailMatch && !isUidMatch && uid.isNotEmpty()) {
+            viewModelScope.launch {
+                try {
+                    repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
+                        .update(mapOf("managerUid" to uid, "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()))
+                } catch (e: Exception) {
+                    android.util.Log.w("MessViewModel", "Admin UID auto-bind notice: ${e.message}")
+                }
+            }
+            return true
+        }
+
+        return isUidMatch || isEmailMatch
+    }
+
+    fun complete3TierAdminAuthentication(
+        passwordInput: String,
+        isNewPassword: Boolean,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val user = repository.auth.currentUser
+            if (user == null) {
+                _isOperationLoading.value = false
+                onFailure("গুগল সাইন-ইন পাওয়া যায়নি। পুনরায় চেষ্টা করুন।")
+                return@launch
+            }
+            val email = user.email?.trim()?.lowercase() ?: ""
+            val uid = user.uid
+
+            if (isNewPassword) {
+                val res = repository.claimInitialAdmin(
+                    messId = MessRepository.DEFAULT_MESS_ID,
+                    initialPassword = passwordInput
+                )
+                _isOperationLoading.value = false
+                res.onSuccess {
+                    _isAdminAuthenticated.value = true
+                    _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
+                        "অভিনন্দন! ৩-ধাপের সম্পূর্ণ নিরাপত্তা যাচাইকরণ সফল। আপনি এখন মেসের অ্যাডমিন।"
+                    else
+                        "Congratulations! 3-Tier security verified and you are now Admin."
+                    onSuccess()
+                }.onFailure {
+                    onFailure(it.message ?: "Failed to set admin password")
+                }
+            } else {
+                val res = repository.verifyAdminPassword(
+                    messId = MessRepository.DEFAULT_MESS_ID,
+                    passwordInput = passwordInput
+                )
+                _isOperationLoading.value = false
+                res.onSuccess { matched ->
+                    if (matched) {
+                        try {
+                            repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
+                                .update(
+                                    mapOf(
+                                        "managerUid" to uid,
+                                        "managerEmail" to email,
+                                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                                    )
+                                )
+                        } catch (e: Exception) {
+                            android.util.Log.w("MessViewModel", "Notice syncing managerUid: ${e.message}")
+                        }
+                        _isAdminAuthenticated.value = true
+                        _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
+                            "স্বাগতম অ্যাডমিন! ৩-ধাপের নিরাপত্তা যাচাইকরণ সফল হয়েছে।"
+                        else
+                            "Welcome Admin! 3-Tier verification successful."
+                        onSuccess()
+                    } else {
+                        onFailure(if (_currentLanguage.value == Language.BENGALI) "ভুল অ্যাডমিন পাসওয়ার্ড!" else "Incorrect admin password!")
+                    }
+                }.onFailure {
+                    onFailure(it.message ?: "Error verifying password")
+                }
+            }
+        }
     }
 
     fun requestAdminOtp(targetEmail: String, onSent: () -> Unit = {}) {
@@ -782,17 +870,7 @@ class MessViewModel(
         val cleanEmail = newEmail.trim().lowercase()
         val genuineUid = targetUid?.trim()?.ifBlank { null }
             ?: authorizedMembersState.value.firstOrNull { it.email.trim().lowercase() == cleanEmail }?.uid
-            ?: membersState.value.firstOrNull { it.phone.trim() == cleanEmail || it.name.trim().lowercase() == cleanEmail }?.id
-
-        if (genuineUid.isNullOrBlank()) {
-            val msg = if (_currentLanguage.value == Language.BENGALI)
-                "অননুমোদিত জিমেইল! নতুন ম্যানেজারকে প্রথমে এই অ্যাপে একবার গুগল দিয়ে সাইন-ইন করতে হবে।"
-            else
-                "User not found! The new manager must sign in with Google to this app once first."
-            _userMessage.value = msg
-            onDone(false)
-            return
-        }
+            ?: ("pending_" + cleanEmail.replace("@", "_at_").replace(".", "_").filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(40))
 
         viewModelScope.launch {
             _isOperationLoading.value = true

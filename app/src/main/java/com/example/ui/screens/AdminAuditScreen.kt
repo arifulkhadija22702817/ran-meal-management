@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SwapHoriz
 import com.example.ui.components.ChangeAdminPasswordDialog
+import com.example.ui.components.PasswordRequirementChecklist
+import com.example.util.AdminPasswordValidator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -541,13 +543,17 @@ fun MonthlyTransferAdminDialog(
                 OutlinedTextField(
                     value = newPassword,
                     onValueChange = { newPassword = it; errorMessage = null },
-                    label = { Text(if (language == Language.ENGLISH) "New Manager Password (Optional)" else "নতুন ম্যানেজারের পাসওয়ার্ড (ঐচ্ছিক)") },
-                    placeholder = { Text(if (language == Language.ENGLISH) "Leave blank for new manager to set" else "খালি রাখলে নতুন ম্যানেজার নিজে সেট করবেন") },
+                    label = { Text(if (language == Language.ENGLISH) "New Manager Password (8-12 chars) *" else "নতুন ম্যানেজারের পাসওয়ার্ড (৮-১২ অক্ষর) *") },
+                    placeholder = { Text(if (language == Language.ENGLISH) "8-12 chars, letter+number+special" else "৮-১২ অক্ষর, বর্ণ+সংখ্যা+স্পেশাল চিহ্ন") },
                     leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                if (newPassword.isNotBlank()) {
+                    PasswordRequirementChecklist(password = newPassword, language = language)
+                }
 
                 OutlinedTextField(
                     value = note,
@@ -584,9 +590,18 @@ fun MonthlyTransferAdminDialog(
                         errorMessage = if (language == Language.ENGLISH) "New manager email cannot be the same as current" else "নতুন ম্যানেজারের ইমেইল বর্তমান ইমেইল থেকে আলাদা হতে হবে"
                         return@Button
                     }
+                    val cleanNewPass = newPassword.trim()
+                    if (cleanNewPass.isBlank()) {
+                        errorMessage = if (language == Language.ENGLISH) "Please enter a password for the new manager" else "নতুন ম্যানেজারের জন্য পাসওয়ার্ড লিখুন"
+                        return@Button
+                    }
+                    val (valid, passErr) = AdminPasswordValidator.validate(cleanNewPass)
+                    if (!valid) {
+                        errorMessage = passErr
+                        return@Button
+                    }
                     isSubmitting = true
                     val handoverNote = note.trim().ifBlank { "Monthly Manager Handover" }
-                    val cleanNewPass = newPassword.trim().ifBlank { null }
                     onConfirmTransfer(currentPassword.trim(), cleanEmail, cleanNewPass, handoverNote) { success ->
                         isSubmitting = false
                         if (success) {

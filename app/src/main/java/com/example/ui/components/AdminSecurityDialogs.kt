@@ -16,7 +16,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Shield
@@ -55,11 +58,77 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.Language
 import com.example.ui.theme.AmberSecondary
 import com.example.ui.theme.EmeraldPrimary
+import com.example.util.AdminPasswordValidator
 
 /**
- * Tier 3 of 3-Tier Security Authentication:
- * Step 1 (Gmail matched) -> Step 2 (OTP code matched) -> Step 3 (Admin Secret Password).
- * If all 3 match, grants full admin access.
+ * Live Password Criteria Checklist:
+ * Visual indicators showing compliance with:
+ * - 8 to 12 characters
+ * - At least one letter (a-zA-Z)
+ * - At least one number (0-9)
+ * - At least one special character (!@#$%^&*...)
+ */
+@Composable
+fun PasswordRequirementChecklist(
+    password: String,
+    language: Language
+) {
+    val isLengthOk = AdminPasswordValidator.isLengthValid(password)
+    val hasLetter = AdminPasswordValidator.hasLetter(password)
+    val hasDigit = AdminPasswordValidator.hasDigit(password)
+    val hasSpecial = AdminPasswordValidator.hasSpecial(password)
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = if (language == Language.BENGALI) "পাসওয়ার্ডের শর্তাবলী (বাধ্যতামূলক):" else "Password Requirements (Mandatory):",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CriterionItem(label = if (language == Language.BENGALI) "৮-১২ অক্ষর" else "8-12 chars", isValid = isLengthOk)
+                CriterionItem(label = if (language == Language.BENGALI) "বর্ণ (A-Z)" else "Letter (A-Z)", isValid = hasLetter)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CriterionItem(label = if (language == Language.BENGALI) "সংখ্যা (0-9)" else "Number (0-9)", isValid = hasDigit)
+                CriterionItem(label = if (language == Language.BENGALI) "চিহ্ন (!@#$)" else "Special (!@#$)", isValid = hasSpecial)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CriterionItem(label: String, isValid: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = if (isValid) Icons.Default.Check else Icons.Default.Close,
+            contentDescription = null,
+            tint = if (isValid) EmeraldPrimary else MaterialTheme.colorScheme.error.copy(alpha = 0.6f),
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = if (isValid) FontWeight.Bold else FontWeight.Normal,
+            color = if (isValid) EmeraldPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * Admin Password Verification Dialog:
+ * Checks whether the registered admin Gmail + secret password match.
+ * If both match, grants full admin access.
  */
 @Composable
 fun AdminPasswordVerificationDialog(
@@ -80,7 +149,7 @@ fun AdminPasswordVerificationDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
                         .background(AmberSecondary.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
@@ -89,18 +158,18 @@ fun AdminPasswordVerificationDialog(
                         imageVector = Icons.Default.Key,
                         contentDescription = null,
                         tint = AmberSecondary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(22.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = if (language == Language.BENGALI) "৩য় ধাপ: অ্যাডমিন পাসওয়ার্ড" else "Tier 3: Admin Password",
+                        text = if (language == Language.BENGALI) "অ্যাডমিন পাসওয়ার্ড যাচাই" else "Admin Password Check",
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp
                     )
                     Text(
-                        text = if (language == Language.BENGALI) "চূড়ান্ত নিরাপত্তা অনুমোদন" else "Final Security Verification",
+                        text = if (language == Language.BENGALI) "নিরাপদ জিমেইল ও পাসওয়ার্ড অনুমোদন" else "Secure Gmail & Password Match",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -109,30 +178,34 @@ fun AdminPasswordVerificationDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Tier 1 & 2 Completed Indicator
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = EmeraldPrimary.copy(alpha = 0.12f)),
-                    shape = RoundedCornerShape(10.dp)
+                // Gmail match confirmation pill
+                Surface(
+                    color = EmeraldPrimary.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldPrimary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = EmeraldPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
                             Text(
-                                text = if (language == Language.BENGALI) "১ম ধাপ: জিমেইল যাচাইকরণ সফল ($targetEmail)" else "Step 1: Gmail Match Confirmed ($targetEmail)",
+                                text = if (language == Language.BENGALI) "মেস অ্যাডমিন জিমেইল:" else "Admin Gmail:",
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold,
+                                fontWeight = FontWeight.Bold,
                                 color = EmeraldPrimary
                             )
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldPrimary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (language == Language.BENGALI) "২য় ধাপ: ওটিপি কোড যাচাইকরণ সফল" else "Step 2: 2FA OTP Verified Successfully",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = EmeraldPrimary
+                                text = targetEmail,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
@@ -140,9 +213,9 @@ fun AdminPasswordVerificationDialog(
 
                 Text(
                     text = if (language == Language.BENGALI)
-                        "পূর্ণ অ্যাডমিন এক্সেস পেতে মেসের গোপন অ্যাডমিন পাসওয়ার্ডটি লিখুন:"
+                        "পূর্ণ অ্যাডমিন এক্সেস পেতে আপনার গোপন পাসওয়ার্ডটি লিখুন:"
                     else
-                        "Enter the secret mess admin password to unlock full management rights:",
+                        "Enter your secret password to unlock mess admin privileges:",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -211,7 +284,7 @@ fun AdminPasswordVerificationDialog(
                 } else {
                     Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (language == Language.BENGALI) "লগইন সম্পন্ন করুন" else "Complete Login")
+                    Text(if (language == Language.BENGALI) "লগইন সম্পন্ন করুন" else "Unlock Admin")
                 }
             }
         },
@@ -226,7 +299,8 @@ fun AdminPasswordVerificationDialog(
 /**
  * Initial Admin Claim Dialog:
  * When no admin/manager Gmail is registered in Firebase, this allows the user to
- * designate their signed-in Gmail as the initial Admin and create their initial Admin Password.
+ * designate their signed-in Gmail as the initial Admin and create their initial Admin Password
+ * (enforcing 8-12 characters with letter + number + special character).
  */
 @Composable
 fun InitialAdminClaimDialog(
@@ -263,12 +337,12 @@ fun InitialAdminClaimDialog(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = if (language == Language.BENGALI) "মেসের প্রথম অ্যাডমিন রেজিস্ট্রেশন" else "Initial Mess Admin Setup",
+                        text = if (language == Language.BENGALI) "মেসের প্রথম অ্যাডমিন তৈরি" else "Create Initial Mess Admin",
                         fontWeight = FontWeight.Bold,
                         fontSize = 17.sp
                     )
                     Text(
-                        text = if (language == Language.BENGALI) "অ্যাডমিন একাউন্ট ও পাসওয়ার্ড তৈরি" else "Create Admin Account & Password",
+                        text = if (language == Language.BENGALI) "জিমেইল ও পাসওয়ার্ড নির্ধারণ" else "Assign Gmail & Password",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -283,14 +357,16 @@ fun InitialAdminClaimDialog(
                 ) {
                     Text(
                         text = if (language == Language.BENGALI)
-                            "এই মেসে বর্তমানে কোনো অ্যাডমিন বা ম্যানেজার নির্ধারিত নেই। আপনার জিমেইল ($userEmail)-কে মেসের প্রধান অ্যাডমিন হিসেবে রেজিস্টার করতে একটি নিরাপদ পাসওয়ার্ড তৈরি করুন।"
+                            "এই মেসে কোনো অ্যাডমিন নির্ধারিত নেই। আপনার জিমেইল ($userEmail)-কে মেসের একমাত্র অ্যাডমিন করতে একটি নিরাপদ পাসওয়ার্ড তৈরি করুন।"
                         else
-                            "No manager is currently assigned to this mess. Set up an admin password to register your Gmail ($userEmail) as the mess manager.",
+                            "No admin is assigned yet. Set a password to register your Gmail ($userEmail) as the mess manager.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(10.dp)
                     )
                 }
+
+                PasswordRequirementChecklist(password = password, language = language)
 
                 OutlinedTextField(
                     value = password,
@@ -298,7 +374,7 @@ fun InitialAdminClaimDialog(
                         password = it
                         errorMessage = null
                     },
-                    label = { Text(if (language == Language.BENGALI) "নতুন অ্যাডমিন পাসওয়ার্ড (কমপক্ষে ৪ অক্ষর)" else "New Admin Password (min 4 chars)") },
+                    label = { Text(if (language == Language.BENGALI) "নতুন অ্যাডমিন পাসওয়ার্ড (৮-১২ অক্ষর)" else "Admin Password (8-12 chars)") },
                     leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -347,8 +423,9 @@ fun InitialAdminClaimDialog(
                 onClick = {
                     val p1 = password.trim()
                     val p2 = confirmPassword.trim()
-                    if (p1.length < 4) {
-                        errorMessage = if (language == Language.BENGALI) "পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে" else "Password must be at least 4 chars"
+                    val (valid, error) = AdminPasswordValidator.validate(p1)
+                    if (!valid) {
+                        errorMessage = error
                         return@Button
                     }
                     if (p1 != p2) {
@@ -370,14 +447,14 @@ fun InitialAdminClaimDialog(
                 },
                 enabled = password.isNotBlank() && confirmPassword.isNotBlank() && !isSubmitting,
                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary),
-                modifier = Modifier.testTag("claim_initial_admin_btn")
+                modifier = Modifier.testTag("initial_admin_submit_btn")
             ) {
                 if (isSubmitting) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                 } else {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (language == Language.BENGALI) "অ্যাডমিন হিসেবে নিশ্চিত করুন" else "Confirm as Admin")
+                    Text(if (language == Language.BENGALI) "অ্যাডমিন নিশ্চিত করুন" else "Set as Admin")
                 }
             }
         },
@@ -390,8 +467,8 @@ fun InitialAdminClaimDialog(
 }
 
 /**
- * Change / Update Admin Password Dialog:
- * Accessible from Admin Settings / Governance card.
+ * Change Admin Password Dialog:
+ * Allows the active admin to update their secret password.
  */
 @Composable
 fun ChangeAdminPasswordDialog(
@@ -434,10 +511,12 @@ fun ChangeAdminPasswordDialog(
                     )
                 }
 
+                PasswordRequirementChecklist(password = newPassword, language = language)
+
                 OutlinedTextField(
                     value = newPassword,
                     onValueChange = { newPassword = it; errorMessage = null },
-                    label = { Text(if (language == Language.BENGALI) "নতুন পাসওয়ার্ড (কমপক্ষে ৪ অক্ষর)" else "New Password (min 4 chars)") },
+                    label = { Text(if (language == Language.BENGALI) "নতুন পাসওয়ার্ড (৮-১২ অক্ষর)" else "New Password (8-12 chars)") },
                     leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -478,20 +557,22 @@ fun ChangeAdminPasswordDialog(
                 onClick = {
                     val n1 = newPassword.trim()
                     val n2 = confirmPassword.trim()
+                    val (valid, error) = AdminPasswordValidator.validate(n1)
+                    if (!valid) {
+                        errorMessage = error
+                        return@Button
+                    }
+                    if (n1 != n2) {
+                        errorMessage = if (language == Language.BENGALI) "নতুন পাসওয়ার্ড মিলছে না!" else "Passwords do not match!"
+                        return@Button
+                    }
                     if (hasExistingPassword && oldPassword.isBlank()) {
                         errorMessage = if (language == Language.BENGALI) "বর্তমান পাসওয়ার্ড লিখুন" else "Enter current password"
                         return@Button
                     }
-                    if (n1.length < 4) {
-                        errorMessage = if (language == Language.BENGALI) "নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে" else "New password must be at least 4 chars"
-                        return@Button
-                    }
-                    if (n1 != n2) {
-                        errorMessage = if (language == Language.BENGALI) "উভয় পাসওয়ার্ড মিলছে না!" else "Passwords do not match!"
-                        return@Button
-                    }
                     isSubmitting = true
-                    onChangePassword(if (hasExistingPassword) oldPassword.trim() else null, n1) { success, msg ->
+                    val oldPassParam = if (hasExistingPassword) oldPassword.trim() else null
+                    onChangePassword(oldPassParam, n1) { success, msg ->
                         isSubmitting = false
                         if (success) {
                             onDismiss()
@@ -500,13 +581,13 @@ fun ChangeAdminPasswordDialog(
                         }
                     }
                 },
-                enabled = !isSubmitting && newPassword.isNotBlank() && confirmPassword.isNotBlank(),
+                enabled = !isSubmitting,
                 colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
             ) {
                 if (isSubmitting) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                 } else {
-                    Text(if (language == Language.BENGALI) "পাসওয়ার্ড আপডেট করুন" else "Update Password")
+                    Text(if (language == Language.BENGALI) "সংরক্ষণ করুন" else "Save Password")
                 }
             }
         },

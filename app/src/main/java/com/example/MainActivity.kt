@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.font.FontWeight
+import com.example.ui.components.Admin3TierSecurityDialog
 import com.example.ui.components.AdminOtpDialog
 import com.example.ui.components.AdminPasswordVerificationDialog
 import com.example.ui.components.InitialAdminClaimDialog
@@ -101,6 +102,7 @@ fun AppRoot() {
     val isAdminAuth by viewModel.isAdminAuthenticated.collectAsState()
     val mess by viewModel.messState.collectAsState()
     val language by viewModel.currentLanguage.collectAsState()
+    var showAdmin3TierDialog by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         val listener = FirebaseAuth.AuthStateListener { auth ->
@@ -123,7 +125,11 @@ fun AppRoot() {
     if (canEnterMainApp) {
         MainAppContent(
             viewModel = viewModel,
+            showAdmin3TierDialogInitial = showAdmin3TierDialog,
+            onDismissAdminDialog = { showAdmin3TierDialog = false },
+            onRequestAdminDialog = { showAdmin3TierDialog = true },
             onSignedOut = {
+                showAdmin3TierDialog = false
                 viewModel.signOutAdmin()
                 currentUser = null
                 performSignOut(context, credentialManager, coroutineScope) {}
@@ -137,11 +143,18 @@ fun AppRoot() {
                 viewModel.enterAsGuest()
             },
             onMemberAuthSuccess = {
+                showAdmin3TierDialog = false
                 viewModel.setAdminAuthenticated(false)
                 currentUser = Firebase.auth.currentUser
                 viewModel.syncUserProfile()
             },
+            onAdminAuthRequested = {
+                showAdmin3TierDialog = true
+                currentUser = Firebase.auth.currentUser
+                viewModel.syncUserProfile()
+            },
             onAdminAuthSuccess = {
+                showAdmin3TierDialog = false
                 viewModel.setAdminAuthenticated(true)
                 currentUser = Firebase.auth.currentUser
                 viewModel.syncUserProfile()
@@ -165,13 +178,15 @@ fun AppRoot() {
 @Composable
 fun MainAppContent(
     viewModel: MessViewModel,
+    showAdmin3TierDialogInitial: Boolean = false,
+    onDismissAdminDialog: () -> Unit = {},
+    onRequestAdminDialog: () -> Unit = {},
     onSignedOut: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    var showInAppOtpDialog by remember { mutableStateOf(false) }
-    var showInAppPasswordDialog by remember { mutableStateOf(false) }
-    var showInitialAdminClaimDialog by remember { mutableStateOf(false) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var showInitialClaimDialog by remember { mutableStateOf(false) }
     var showNotAdminAlert by remember { mutableStateOf(false) }
 
     val mess by viewModel.messState.collectAsState()
@@ -206,58 +221,61 @@ fun MainAppContent(
             managerEmail.isNotBlank() &&
             currentEmail.equals(managerEmail, ignoreCase = true)
 
+    LaunchedEffect(showAdmin3TierDialogInitial) {
+        if (showAdmin3TierDialogInitial) {
+            if (isManagerUnassigned) {
+                showInitialClaimDialog = true
+            } else if (isRegisteredManager) {
+                showPasswordDialog = true
+            }
+        }
+    }
+
     val requestAdminUnlock = {
         if (isManagerUnassigned) {
-            showInitialAdminClaimDialog = true
-        } else if (isRegisteredManager && currentAuthUser?.email != null) {
-            viewModel.requestAdminOtp(currentAuthUser.email!!) {
-                showInAppOtpDialog = true
-            }
+            showInitialClaimDialog = true
+            onRequestAdminDialog()
+        } else if (isRegisteredManager) {
+            showPasswordDialog = true
+            onRequestAdminDialog()
         } else {
             showNotAdminAlert = true
         }
     }
 
-    if (showInitialAdminClaimDialog && currentAuthUser?.email != null) {
-        InitialAdminClaimDialog(
-            userEmail = currentAuthUser.email!!,
+    if (showPasswordDialog && currentAuthUser?.email != null) {
+        AdminPasswordVerificationDialog(
+            targetEmail = currentAuthUser.email!!,
             language = language,
-            onDismiss = { showInitialAdminClaimDialog = false },
-            onClaimAdmin = { pass, onSuccess, onFailure ->
-                viewModel.claimInitialAdmin(pass, onSuccess, onFailure)
+            onDismiss = {
+                showPasswordDialog = false
+                onDismissAdminDialog()
+            },
+            onVerifyPassword = { password, onSuccess, onFailure ->
+                viewModel.verifyAdminPassword(password, onSuccess, onFailure)
             },
             onSuccess = {
-                showInitialAdminClaimDialog = false
+                showPasswordDialog = false
+                onDismissAdminDialog()
                 viewModel.setAdminAuthenticated(true)
             }
         )
     }
 
-    if (showInAppOtpDialog && currentAuthUser?.email != null) {
-        AdminOtpDialog(
-            targetEmail = currentAuthUser.email!!,
+    if (showInitialClaimDialog && currentAuthUser?.email != null) {
+        InitialAdminClaimDialog(
+            userEmail = currentAuthUser.email!!,
             language = language,
-            onDismiss = { showInAppOtpDialog = false },
-            onVerifySuccess = {
-                showInAppOtpDialog = false
-                showInAppPasswordDialog = true
+            onDismiss = {
+                showInitialClaimDialog = false
+                onDismissAdminDialog()
             },
-            onResendOtp = {
-                viewModel.requestAdminOtp(currentAuthUser.email!!)
-            }
-        )
-    }
-
-    if (showInAppPasswordDialog && currentAuthUser?.email != null) {
-        AdminPasswordVerificationDialog(
-            targetEmail = currentAuthUser.email!!,
-            language = language,
-            onDismiss = { showInAppPasswordDialog = false },
-            onVerifyPassword = { password, onSuccess, onFailure ->
-                viewModel.verifyAdminPassword(password, onSuccess, onFailure)
+            onClaimAdmin = { password, onSuccess, onFailure ->
+                viewModel.claimInitialAdmin(password, onSuccess, onFailure)
             },
             onSuccess = {
-                showInAppPasswordDialog = false
+                showInitialClaimDialog = false
+                onDismissAdminDialog()
                 viewModel.setAdminAuthenticated(true)
             }
         )
@@ -362,9 +380,9 @@ fun MainAppContent(
                                         "No manager assigned. Set up password to become the first manager."
                                 } else {
                                     if (language == Language.BENGALI)
-                                        "আপনি নিবন্ধিত অ্যাডমিন। পূর্ণ নিয়ন্ত্রণ পেতে ৩-ধাপের নিরাপত্তা যাচাই সম্পন্ন করুন।"
+                                        "আপনি মেসের নিবন্ধিত অ্যাডমিন। পূর্ণ নিয়ন্ত্রণ পেতে অ্যাডমিন পাসওয়ার্ড দিয়ে আনলক করুন।"
                                     else
-                                        "You are the manager. Complete 3-tier security to unlock management."
+                                        "You are the registered manager. Unlock with your admin password."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,

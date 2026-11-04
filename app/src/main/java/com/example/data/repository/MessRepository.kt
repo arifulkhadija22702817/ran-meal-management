@@ -73,7 +73,7 @@ class MessRepository(
         }
     }
 
-    private val auth = Firebase.auth
+    val auth = Firebase.auth
 
     fun getCurrentUserUid(): String? = auth.currentUser?.uid
     fun getCurrentUserEmail(): String? = auth.currentUser?.email
@@ -406,8 +406,9 @@ class MessRepository(
             return Result.failure(IllegalStateException("A valid Gmail address is required"))
         }
         val cleanPassword = initialPassword.trim()
-        if (cleanPassword.length < 4) {
-            return Result.failure(IllegalArgumentException("পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে"))
+        val (valid, errorMsg) = com.example.util.AdminPasswordValidator.validate(cleanPassword)
+        if (!valid) {
+            return Result.failure(IllegalArgumentException(errorMsg ?: "পাসওয়ার্ডের শর্তাবলী পূরণ হয়নি"))
         }
 
         val hashedPassword = hashAdminPassword(cleanPassword)
@@ -511,8 +512,9 @@ class MessRepository(
         val user = auth.currentUser
             ?: return Result.failure(IllegalStateException("User is not authenticated"))
         val cleanNew = newPassword.trim()
-        if (cleanNew.length < 4) {
-            return Result.failure(IllegalArgumentException("নতুন পাসওয়ার্ড কমপক্ষে ৪ অক্ষরের হতে হবে"))
+        val (valid, errorMsg) = com.example.util.AdminPasswordValidator.validate(cleanNew)
+        if (!valid) {
+            return Result.failure(IllegalArgumentException(errorMsg ?: "নতুন পাসওয়ার্ডের শর্তাবলী পূরণ হয়নি"))
         }
 
         val docRef = db.collection("messes").document(messId)
