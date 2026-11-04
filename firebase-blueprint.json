@@ -1,0 +1,125 @@
+{
+  "entities": {
+    "Mess": {
+      "title": "Mess",
+      "description": "Top-level student or bachelor mess organization document",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Display name of the mess hostel" },
+        "currency": { "type": "string", "description": "Currency code, defaults to BDT" },
+        "managerUid": { "type": "string", "description": "Google UID of the mess manager" },
+        "managerEmail": { "type": "string", "description": "Email address of the mess manager" },
+        "currentMonth": { "type": "string", "description": "Current active billing month YYYY-MM" },
+        "adminPassword": { "type": "string", "description": "Admin security password or hash" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp FieldValue.serverTimestamp()" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp FieldValue.serverTimestamp()" }
+      },
+      "required": ["name", "managerUid", "managerEmail", "createdAt"]
+    },
+    "Member": {
+      "title": "Member",
+      "description": "Resident student/member in the mess",
+      "type": "object",
+      "properties": {
+        "messId": { "type": "string", "description": "Reference to parent mess" },
+        "name": { "type": "string", "description": "Member's full name" },
+        "phone": { "type": "string", "description": "Member's WhatsApp contact number" },
+        "roomNumber": { "type": "string", "description": "Optional room or seat number" },
+        "potDeposits": { "type": "number", "description": "Cumulative rice pots deposited" },
+        "cashDeposits": { "type": "number", "description": "Cumulative cash/bazaar money deposited in BDT" },
+        "active": { "type": "boolean", "description": "Whether the member is currently residing" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["messId", "name", "phone", "potDeposits", "cashDeposits", "active", "createdAt"]
+    },
+    "DailyMeal": {
+      "title": "DailyMeal",
+      "description": "Daily 3-time meal logging record for all mess members",
+      "type": "object",
+      "properties": {
+        "messId": { "type": "string", "description": "Reference to parent mess" },
+        "date": { "type": "string", "description": "Date formatted as YYYY-MM-DD" },
+        "breakfastCount": { "type": "number", "description": "Aggregated breakfast meal/pot count" },
+        "lunchCount": { "type": "number", "description": "Aggregated lunch meal/pot count" },
+        "dinnerCount": { "type": "number", "description": "Aggregated dinner meal/pot count" },
+        "memberMeals": { "type": "object", "description": "Member meal breakdown map" },
+        "notes": { "type": "string", "description": "Daily menu or special notes" },
+        "updatedBy": { "type": "string", "description": "UID or email of the manager updating" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["messId", "date", "breakfastCount", "lunchCount", "dinnerCount", "createdAt"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Market / Bazaar grocery itemization",
+      "type": "object",
+      "properties": {
+        "messId": { "type": "string", "description": "Reference to parent mess" },
+        "title": { "type": "string", "description": "Description of items bought" },
+        "amount": { "type": "number", "description": "Expense cost in BDT" },
+        "date": { "type": "string", "description": "Purchase date YYYY-MM-DD" },
+        "payerMemberId": { "type": "string", "description": "Member ID who purchased or paid" },
+        "category": { "type": "string", "enum": ["BAZAAR", "SPICES", "EXTRA"], "description": "Expense category" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["messId", "title", "amount", "date", "category", "createdAt"]
+    },
+    "Utility": {
+      "title": "Utility",
+      "description": "Shared monthly utilities such as wifi, electricity, gas, rent, cook",
+      "type": "object",
+      "properties": {
+        "messId": { "type": "string", "description": "Reference to parent mess" },
+        "title": { "type": "string", "description": "Utility description" },
+        "amount": { "type": "number", "description": "Total bill amount in BDT" },
+        "month": { "type": "string", "description": "Target billing month YYYY-MM" },
+        "category": { "type": "string", "enum": ["RENT", "ELECTRICITY", "GAS", "WIFI", "MAID", "OTHER"], "description": "Utility category" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Update timestamp" }
+      },
+      "required": ["messId", "title", "amount", "month", "category", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Manager change audit trail for tamper detection",
+      "type": "object",
+      "properties": {
+        "messId": { "type": "string", "description": "Reference to parent mess" },
+        "action": { "type": "string", "description": "Action performed (e.g. EDIT_MEAL, ADD_EXPENSE)" },
+        "details": { "type": "string", "description": "Readable summary of changed fields" },
+        "performedBy": { "type": "string", "description": "Manager email who executed action" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Server timestamp" }
+      },
+      "required": ["messId", "action", "details", "performedBy", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/messes/{messId}": {
+      "schema": { "$ref": "#/entities/Mess" },
+      "description": "Top-level mess registry"
+    },
+    "/messes/{messId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/Member" },
+      "description": "Members registered in this mess"
+    },
+    "/messes/{messId}/daily_meals/{mealId}": {
+      "schema": { "$ref": "#/entities/DailyMeal" },
+      "description": "Daily 3-meal tracking log"
+    },
+    "/messes/{messId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Bazaar and shared market grocery expenditures"
+    },
+    "/messes/{messId}/utilities/{utilityId}": {
+      "schema": { "$ref": "#/entities/Utility" },
+      "description": "Shared utility bills split among members"
+    },
+    "/messes/{messId}/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable manager modification audit logs"
+    }
+  }
+}

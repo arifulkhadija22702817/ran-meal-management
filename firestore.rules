@@ -1,0 +1,294 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null &&
+             request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUid(uid) {
+      return uid is string && uid.size() >= 1 && uid.size() <= 128 && uid.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // UID-Only Manager Authorization: Must be signed in, mess must exist, and managerUid must equal request.auth.uid
+    function isCurrentMessManager(messId) {
+      let messPath = /databases/$(database)/documents/messes/$(messId);
+      return isSignedIn() && exists(messPath) &&
+             get(messPath).data.managerUid == request.auth.uid;
+    }
+
+    // Mess Read Authorization: Manager or Authorized Member
+    function isMessAuthorized(messId) {
+      let messPath = /databases/$(database)/documents/messes/$(messId);
+      return isSignedIn() && exists(messPath) && (
+        get(messPath).data.managerUid == request.auth.uid ||
+        exists(/databases/$(database)/documents/messes/$(messId)/authorized_members/$(request.auth.uid))
+      );
+    }
+
+    function isValidMess(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 10 &&
+             (!('managerUid' in data) || (isValidUid(data.managerUid))) &&
+             (!('managerEmail' in data) || (data.managerEmail is string && data.managerEmail.size() <= 120)) &&
+             (!('adminPassword' in data) || (data.adminPassword is string && data.adminPassword.size() <= 200)) &&
+             (!('currentMonth' in data) || (data.currentMonth is string && data.currentMonth.size() <= 10)) &&
+             (!('calculationMode' in data) || (data.calculationMode is string && data.calculationMode.size() <= 32)) &&
+             (!('fullMealRate' in data) || (data.fullMealRate is number && data.fullMealRate >= 0)) &&
+             (!('partialMealRate' in data) || (data.partialMealRate is number && data.partialMealRate >= 0)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp) &&
+             (!('managerAssignedAt' in data) || data.managerAssignedAt is timestamp);
+    }
+
+    function isValidMember(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+             (!('roomNumber' in data) || (data.roomNumber is string && data.roomNumber.size() <= 30)) &&
+             (!('potDeposits' in data) || (data.potDeposits is number && data.potDeposits >= 0)) &&
+             (!('cashDeposits' in data) || (data.cashDeposits is number && data.cashDeposits >= 0)) &&
+             (!('active' in data) || data.active is bool) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidDailyMeal(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             data.date is string && data.date.size() >= 8 && data.date.size() <= 12 &&
+             (!('breakfastCount' in data) || (data.breakfastCount is number && data.breakfastCount >= 0)) &&
+             (!('lunchCount' in data) || (data.lunchCount is number && data.lunchCount >= 0)) &&
+             (!('dinnerCount' in data) || (data.dinnerCount is number && data.dinnerCount >= 0)) &&
+             (!('memberMeals' in data) || data.memberMeals is map) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 120)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidExpense(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 150 &&
+             (!('amount' in data) || (data.amount is number && data.amount >= 0)) &&
+             (!('date' in data) || (data.date is string && data.date.size() >= 8 && data.date.size() <= 12)) &&
+             (!('payerMemberId' in data) || (data.payerMemberId is string && data.payerMemberId.size() <= 128)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 30)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidUtility(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             (!('amount' in data) || (data.amount is number && data.amount >= 0)) &&
+             (!('month' in data) || (data.month is string && data.month.size() >= 6 && data.month.size() <= 10)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 30)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidEggRecord(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             (!('date' in data) || (data.date is string && data.date.size() >= 8 && data.date.size() <= 12)) &&
+             (!('purchasedCount' in data) || (data.purchasedCount is number && data.purchasedCount >= 0)) &&
+             (!('consumedCount' in data) || (data.consumedCount is number && data.consumedCount >= 0)) &&
+             (!('damagedCount' in data) || (data.damagedCount is number && data.damagedCount >= 0)) &&
+             (!('cost' in data) || (data.cost is number && data.cost >= 0)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidAuditLog(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             data.action is string && data.action.size() >= 1 && data.action.size() <= 60 &&
+             (!('details' in data) || (data.details is string && data.details.size() <= 500)) &&
+             (!('performedBy' in data) || (data.performedBy is string && data.performedBy.size() <= 120)) &&
+             (!('timestamp' in data) || data.timestamp is timestamp);
+    }
+
+    function isValidBackup(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             data.label is string && data.label.size() >= 1 && data.label.size() <= 200 &&
+             (!('backupDataJson' in data) || (data.backupDataJson is string && data.backupDataJson.size() >= 2)) &&
+             (!('checksum' in data) || (data.checksum is string && data.checksum.size() <= 64)) &&
+             (!('dateString' in data) || (data.dateString is string && data.dateString.size() <= 50)) &&
+             (!('reason' in data) || (data.reason is string && data.reason.size() <= 50)) &&
+             (!('createdAt' in data) || data.createdAt is timestamp) &&
+             (!('timestamp' in data) || data.timestamp is timestamp);
+    }
+
+    function isValidAdminHistory(data) {
+      return data.messId is string && isValidId(data.messId) &&
+             isValidUid(data.newAdminUid) &&
+             data.newAdminEmail is string && data.newAdminEmail.size() >= 5 &&
+             (!('previousAdminUid' in data) || isValidUid(data.previousAdminUid)) &&
+             (!('previousAdminEmail' in data) || data.previousAdminEmail is string) &&
+             (!('transferredAt' in data) || data.transferredAt is timestamp);
+    }
+
+    // -------------------------------------------------------------
+    // User Profiles Collection (Private, Non-Scrapable)
+    // -------------------------------------------------------------
+    match /user_profiles/{userId} {
+      // User reads own profile; or an active mess manager reads for member/admin verification
+      allow get: if isSignedIn() && (
+        request.auth.uid == userId ||
+        isCurrentMessManager('main_mess')
+      );
+      // Entire collection scraping is strictly prohibited
+      allow list: if false;
+
+      // User creates own profile bound to token
+      allow create: if isSignedIn() && request.auth.uid == userId &&
+                       isValidUid(userId) &&
+                       incoming().uid == userId &&
+                       incoming().email.lower() == request.auth.token.email.lower() &&
+                       (!('displayName' in incoming()) || (incoming().displayName is string && incoming().displayName.size() <= 80)) &&
+                       (!('createdAt' in incoming()) || incoming().createdAt is timestamp);
+
+      // User updates only displayName / lastActiveAt; uid and email are immutable
+      allow update: if isSignedIn() && request.auth.uid == userId &&
+                       incoming().uid == existing().uid &&
+                       incoming().email == existing().email &&
+                       (!('displayName' in incoming()) || (incoming().displayName is string && incoming().displayName.size() <= 80)) &&
+                       (!('lastActiveAt' in incoming()) || incoming().lastActiveAt is timestamp);
+
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------
+    // Mess Hierarchy
+    // -------------------------------------------------------------
+    match /messes/{messId} {
+      // Read access: Authenticated mess manager or authorized members
+      allow get, list: if isMessAuthorized(messId);
+
+      // Mess creation (bootstrap): Only if it does not yet exist, and creator is self-assigned manager with verified email
+      allow create: if isSignedIn() &&
+                       !exists(/databases/$(database)/documents/messes/$(messId)) &&
+                       isValidId(messId) &&
+                       isValidMess(incoming()) &&
+                       incoming().managerUid == request.auth.uid &&
+                       incoming().managerEmail.lower() == request.auth.token.email.lower();
+
+      // Mess updates: Restricted to current manager OR initial unassigned manager claim
+      allow update: if isSignedIn() && isValidId(messId) && isValidMess(incoming()) && (
+                       isCurrentMessManager(messId) ||
+                       ((!('managerUid' in existing()) || existing().managerUid == "" || existing().managerUid == "manager_placeholder" || !('managerEmail' in existing()) || existing().managerEmail == "") &&
+                        incoming().managerUid == request.auth.uid &&
+                        incoming().managerEmail.lower() == request.auth.token.email.lower())
+                     );
+
+      // Root mess deletion is strictly prohibited to safeguard data
+      allow delete: if false;
+
+      // Authorized Members subcollection
+      match /authorized_members/{memberUid} {
+        allow get: if isSignedIn() && (request.auth.uid == memberUid || isCurrentMessManager(messId));
+        allow list: if isMessAuthorized(messId);
+        allow create, update: if isSignedIn() && (
+          isCurrentMessManager(messId) ||
+          (request.auth.uid == memberUid && isValidUid(memberUid) && incoming().uid == memberUid && incoming().email.lower() == request.auth.token.email.lower())
+        );
+        allow delete: if isCurrentMessManager(messId) || (isSignedIn() && request.auth.uid == memberUid);
+      }
+
+      match /members/{memberId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create, update: if isValidId(memberId) &&
+                                 incoming().messId == messId &&
+                                 isValidMember(incoming()) &&
+                                 isCurrentMessManager(messId);
+        allow delete: if isValidId(memberId) && isCurrentMessManager(messId);
+      }
+
+      match /daily_meals/{mealId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create, update: if isValidId(mealId) &&
+                                 incoming().messId == messId &&
+                                 isValidDailyMeal(incoming()) &&
+                                 isCurrentMessManager(messId);
+        allow delete: if isValidId(mealId) && isCurrentMessManager(messId);
+      }
+
+      match /egg_records/{recordId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create, update: if isValidId(recordId) &&
+                                 incoming().messId == messId &&
+                                 isValidEggRecord(incoming()) &&
+                                 isCurrentMessManager(messId);
+        allow delete: if isValidId(recordId) && isCurrentMessManager(messId);
+      }
+
+      match /expenses/{expenseId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create, update: if isValidId(expenseId) &&
+                                 incoming().messId == messId &&
+                                 isValidExpense(incoming()) &&
+                                 isCurrentMessManager(messId);
+        allow delete: if isValidId(expenseId) && isCurrentMessManager(messId);
+      }
+
+      match /utilities/{utilityId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create, update: if isValidId(utilityId) &&
+                                 incoming().messId == messId &&
+                                 isValidUtility(incoming()) &&
+                                 isCurrentMessManager(messId);
+        allow delete: if isValidId(utilityId) && isCurrentMessManager(messId);
+      }
+
+      match /audit_logs/{logId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create: if isCurrentMessManager(messId) &&
+                         isValidId(logId) &&
+                         incoming().messId == messId &&
+                         isValidAuditLog(incoming()) &&
+                         (incoming().performedBy.lower() == request.auth.token.email.lower() || incoming().performedBy == request.auth.uid);
+        allow update, delete: if false;
+      }
+
+      match /backups/{backupId} {
+        allow get, list: if isMessAuthorized(messId);
+        allow create: if isCurrentMessManager(messId) &&
+                         isValidId(backupId) &&
+                         incoming().messId == messId &&
+                         isValidBackup(incoming());
+        allow update: if false;
+        allow delete: if isValidId(backupId) && isCurrentMessManager(messId);
+      }
+
+      match /admin_history/{historyId} {
+        allow get, list: if isMessAuthorized(messId);
+        // getAfter() validation: Enforces that newAdminUid matches parent mess managerUid after transaction
+        allow create: if isCurrentMessManager(messId) &&
+                         isValidId(historyId) &&
+                         incoming().messId == messId &&
+                         isValidAdminHistory(incoming()) &&
+                         incoming().previousAdminUid == request.auth.uid &&
+                         getAfter(/databases/$(database)/documents/messes/$(messId)).data.managerUid == incoming().newAdminUid;
+        allow update, delete: if false;
+      }
+    }
+  }
+}

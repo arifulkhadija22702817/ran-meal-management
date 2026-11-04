@@ -1,0 +1,6 @@
+{
+  "name": "Meal Management",
+  "description": "Student & bachelor mess meal management, rice pot tracking, monthly bazaar calculation, and bill splitting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
