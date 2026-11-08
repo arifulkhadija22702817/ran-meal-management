@@ -156,20 +156,35 @@ fun MessTopBar(
                 }
             }
 
-            // Switch to Admin Button (if currently in member mode)
+            // Switch to Admin Button (When user is in member mode)
             if (!isAdmin && onSwitchToAdmin != null) {
-                IconButton(
+                Surface(
                     onClick = onSwitchToAdmin,
+                    shape = RoundedCornerShape(20.dp),
+                    color = AmberSecondary.copy(alpha = 0.15f),
+                    border = BorderStroke(1.dp, AmberSecondary.copy(alpha = 0.6f)),
                     modifier = Modifier
+                        .padding(horizontal = 4.dp)
                         .testTag("switch_to_admin_button")
-                        .size(36.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AdminPanelSettings,
-                        contentDescription = "Admin Login",
-                        tint = AmberSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AdminPanelSettings,
+                            contentDescription = "Admin Login",
+                            tint = AmberSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (language == Language.BENGALI) "অ্যাডমিন লগইন" else "Admin Login",
+                            color = AmberSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
 

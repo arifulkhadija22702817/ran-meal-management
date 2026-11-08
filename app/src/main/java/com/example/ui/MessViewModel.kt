@@ -234,9 +234,12 @@ class MessViewModel(
         _isAdminAuthenticated.value = auth
     }
 
-    fun isUserAdmin(mess: Mess?): Boolean {
-        if (!_isAdminAuthenticated.value) return false
-        val uid = repository.getCurrentUserUid() ?: return false
+    val isUserAdminFlow: StateFlow<Boolean> = combine(
+        _isAdminAuthenticated,
+        messState
+    ) { isAuth, mess ->
+        if (!isAuth) return@combine false
+        val uid = repository.getCurrentUserUid() ?: return@combine false
         val userEmail = repository.auth.currentUser?.email?.trim()?.lowercase() ?: ""
         val managerUid = mess?.managerUid ?: ""
         val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
@@ -244,19 +247,33 @@ class MessViewModel(
         val isUidMatch = uid.isNotEmpty() && uid == managerUid
         val isEmailMatch = userEmail.isNotEmpty() && managerEmail.isNotEmpty() && userEmail == managerEmail
 
-        if (isEmailMatch && !isUidMatch && uid.isNotEmpty()) {
+        if (uid.isNotEmpty() && (!isUidMatch || managerEmail.isEmpty() || managerEmail.contains("placeholder"))) {
             viewModelScope.launch {
                 try {
                     repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
-                        .update(mapOf("managerUid" to uid, "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()))
+                        .update(
+                            mapOf(
+                                "managerUid" to uid,
+                                "managerEmail" to userEmail,
+                                "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                            )
+                        )
+                    repository.ensureUserAuthorized(
+                        messId = MessRepository.DEFAULT_MESS_ID,
+                        uid = uid,
+                        email = userEmail,
+                        displayName = repository.auth.currentUser?.displayName ?: userEmail
+                    )
                 } catch (e: Exception) {
-                    android.util.Log.w("MessViewModel", "Admin UID auto-bind notice: ${e.message}")
+                    android.util.Log.w("MessViewModel", "Notice auto-binding admin in Firestore: ${e.message}")
                 }
             }
-            return true
         }
+        true
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-        return isUidMatch || isEmailMatch
+    fun isUserAdmin(mess: Mess? = messState.value): Boolean {
+        return _isAdminAuthenticated.value && repository.getCurrentUserUid() != null
     }
 
     fun complete3TierAdminAuthentication(
@@ -392,38 +409,95 @@ class MessViewModel(
         }
     }
 
+    fun isMessAdminConfigured(mess: Mess? = messState.value): Boolean {
+        if (mess == null) return false
+        val email = mess.managerEmail.trim().lowercase()
+        val pass = mess.adminPassword.trim()
+        return email.isNotEmpty() && !email.contains("placeholder") && pass.isNotEmpty()
+    }
+
+    fun verifyAdminCredentials(
+        emailInput: String,
+        passwordInput: String,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val res = repository.verifyAdminCredentials(
+                messId = MessRepository.DEFAULT_MESS_ID,
+                inputEmail = emailInput,
+                inputPassword = passwordInput
+            )
+            _isOperationLoading.value = false
+            res.onSuccess { matched ->
+                if (matched) {
+                    _isAdminAuthenticated.value = true
+                    _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
+                        "স্বাগতম অ্যাডমিন! মেস ব্যবস্থাপনা সফলভাবে আনলক হয়েছে।"
+                    else
+                        "Welcome Admin! Mess management unlocked successfully."
+                    onSuccess()
+                } else {
+                    _isAdminAuthenticated.value = false
+                    onFailure(if (_currentLanguage.value == Language.BENGALI) "ভুল অ্যাডমিন তথ্য!" else "Invalid admin credentials!")
+                }
+            }.onFailure { err ->
+                _isAdminAuthenticated.value = false
+                onFailure(err.message ?: if (_currentLanguage.value == Language.BENGALI) "যাচাই ব্যর্থ হয়েছে" else "Verification failed")
+            }
+        }
+    }
+
     fun verifyAdminPassword(
         passwordInput: String,
         onSuccess: () -> Unit,
         onFailure: (String) -> Unit
     ) {
-        val stored = messState.value?.adminPassword ?: ""
-        if (stored.isBlank()) {
-            viewModelScope.launch {
-                val res = repository.verifyAdminPassword(MessRepository.DEFAULT_MESS_ID, passwordInput)
-                if (res.getOrDefault(false)) {
+        val user = repository.auth.currentUser
+        val uid = user?.uid ?: ""
+        val email = (user?.email ?: "").trim().lowercase()
+
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val res = repository.verifyAdminPassword(MessRepository.DEFAULT_MESS_ID, passwordInput)
+            _isOperationLoading.value = false
+            res.onSuccess { matched ->
+                if (matched) {
                     _isAdminAuthenticated.value = true
+                    if (uid.isNotEmpty()) {
+                        try {
+                            repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
+                                .update(
+                                    mapOf(
+                                        "managerUid" to uid,
+                                        "managerEmail" to email,
+                                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                                    )
+                                )
+                            repository.ensureUserAuthorized(
+                                messId = MessRepository.DEFAULT_MESS_ID,
+                                uid = uid,
+                                email = email,
+                                displayName = user?.displayName ?: email
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.w("MessViewModel", "Notice binding manager: ${e.message}")
+                        }
+                    }
                     _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                        "৩-ধাপের সম্পূর্ণ নিরাপত্তা যাচাইকরণ সফল! স্বাগতম অ্যাডমিন।"
+                        "স্বাগতম অ্যাডমিন! মেস ব্যবস্থাপনা সফলভাবে আনলক হয়েছে।"
                     else
-                        "3-Tier security verified! Welcome Admin."
+                        "Welcome Admin! Mess management unlocked successfully."
                     onSuccess()
                 } else {
-                    onFailure("ভুল অ্যাডমিন পাসওয়ার্ড! প্রবেশাধিকার অস্বীকৃত।")
+                    _isAdminAuthenticated.value = false
+                    onFailure(if (_currentLanguage.value == Language.BENGALI) "ভুল অ্যাডমিন পাসওয়ার্ড! প্রবেশাধিকার অস্বীকৃত।" else "Incorrect admin password! Access denied.")
                 }
+            }.onFailure { err ->
+                _isAdminAuthenticated.value = false
+                onFailure(err.message ?: if (_currentLanguage.value == Language.BENGALI) "পাসওয়ার্ড যাচাই ব্যর্থ হয়েছে" else "Password verification failed")
             }
-            return
-        }
-
-        if (MessRepository.verifyPasswordHash(passwordInput, stored)) {
-            _isAdminAuthenticated.value = true
-            _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                "৩-ধাপের সম্পূর্ণ নিরাপত্তা যাচাইকরণ সফল! স্বাগতম অ্যাডমিন।"
-            else
-                "3-Tier security verified! Welcome Admin."
-            onSuccess()
-        } else {
-            onFailure("ভুল অ্যাডমিন পাসওয়ার্ড! প্রবেশাধিকার অস্বীকৃত।")
         }
     }
 
@@ -451,6 +525,32 @@ class MessViewModel(
                 val msg = it.message ?: "পাসওয়ার্ড আপডেট ব্যর্থ হয়েছে"
                 _userMessage.value = msg
                 onDone(false, msg)
+            }
+        }
+    }
+
+    fun recoverAdminPassword(
+        newPassword: String,
+        onSuccess: () -> Unit,
+        onFailure: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isOperationLoading.value = true
+            val result = repository.recoverAdminPassword(
+                messId = MessRepository.DEFAULT_MESS_ID,
+                newPassword = newPassword
+            )
+            _isOperationLoading.value = false
+            result.onSuccess {
+                _isAdminAuthenticated.value = true
+                _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
+                    "অ্যাডমিন পাসওয়ার্ড সফলভাবে রিকভার ও আপডেট করা হয়েছে!"
+                else
+                    "Admin password recovered and updated successfully!"
+                onSuccess()
+            }.onFailure {
+                _isAdminAuthenticated.value = false
+                onFailure(it.message ?: "পাসওয়ার্ড রিকভারি ব্যর্থ হয়েছে")
             }
         }
     }
@@ -661,6 +761,7 @@ class MessViewModel(
         memberId: String,
         turnOn: Boolean
     ) {
+        if (!requireAdminOrShowError()) return
         val existingDaily = dailyMealsState.value.firstOrNull { it.date == date }
         if (AntiCorruptionPolicy.isMealLocked(existingDaily, date)) {
             _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
@@ -674,8 +775,8 @@ class MessViewModel(
             val memberEntry = existingMeals[memberId]?.toMutableMap() ?: mutableMapOf()
 
             if (turnOn) {
-                // Turn ON full day: Breakfast 0.5 (half pot) or 1.0, Lunch 1.0, Dinner 1.0
-                memberEntry["b"] = 0.5
+                // Turn ON full day: Breakfast 1.0, Lunch 1.0, Dinner 1.0
+                memberEntry["b"] = 1.0
                 memberEntry["l"] = 1.0
                 memberEntry["d"] = 1.0
             } else {

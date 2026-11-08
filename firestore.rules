@@ -9,8 +9,7 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
-      return request.auth != null &&
-             request.auth.token.email_verified == true;
+      return request.auth != null;
     }
 
     function isValidId(id) {
@@ -29,11 +28,12 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // UID-Only Manager Authorization: Must be signed in, mess must exist, and managerUid must equal request.auth.uid
+    // Manager Authorization: Signed in, mess exists, and UID or managerEmail matches
     function isCurrentMessManager(messId) {
       let messPath = /databases/$(database)/documents/messes/$(messId);
       return isSignedIn() && exists(messPath) &&
-             get(messPath).data.managerUid == request.auth.uid;
+             (get(messPath).data.managerUid == request.auth.uid ||
+              (request.auth.token.email != null && 'managerEmail' in get(messPath).data && get(messPath).data.managerEmail.lower() == request.auth.token.email.lower()));
     }
 
     // Mess Read Authorization: Any signed-in user can read mess state

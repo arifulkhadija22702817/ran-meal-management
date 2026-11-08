@@ -730,28 +730,49 @@ fun MealSheetScreen(
                                 }
                             }
 
-                            // Informative Attendance Badge (Read-only status, NO one-click toggle button)
+                            // Attendance Toggle Button (Click to toggle full-day meal presence)
                             Surface(
-                                shape = RoundedCornerShape(20.dp),
-                                color = if (isMemberPresent) VividGreenActive.copy(alpha = 0.15f) else InactiveButtonBg,
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    if (isMemberPresent) VividGreenBorder else InactiveButtonBorder
-                                )
-                            ) {
-                                Text(
-                                    text = if (isMemberPresent) {
-                                        if (language == Language.BENGALI) "মিল চালু (${String.format(Locale.US, "%.1f", memberDayTotal)})"
-                                        else "Present (${String.format(Locale.US, "%.1f", memberDayTotal)})"
+                                onClick = {
+                                    if (!isAdmin) {
+                                        showUnauthorizedDialog = true
+                                    } else if (isMealSheetLocked) {
+                                        showLockedDialog = true
                                     } else {
-                                        if (language == Language.BENGALI) "মিল বন্ধ (০)"
-                                        else "Absent (0)"
-                                    },
-                                    color = if (isMemberPresent) VividGreenBorder else InactiveTextColor,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.5.sp,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                )
+                                        onToggleFullDayMeal(selectedDate, member.id, !isMemberPresent)
+                                    }
+                                },
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (isMemberPresent) VividGreenActive.copy(alpha = 0.18f) else InactiveButtonBg,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.2.dp,
+                                    if (isMemberPresent) VividGreenBorder else InactiveButtonBorder
+                                ),
+                                modifier = Modifier.testTag("attendance_badge_${member.id}")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isMemberPresent) Icons.Default.Check else Icons.Default.Close,
+                                        contentDescription = null,
+                                        tint = if (isMemberPresent) VividGreenBorder else InactiveTextColor,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Text(
+                                        text = if (isMemberPresent) {
+                                            if (language == Language.BENGALI) "মিল চালু (${String.format(Locale.US, "%.1f", memberDayTotal)})"
+                                            else "Present (${String.format(Locale.US, "%.1f", memberDayTotal)})"
+                                        } else {
+                                            if (language == Language.BENGALI) "মিল বন্ধ (০)"
+                                            else "Absent (0)"
+                                        },
+                                        color = if (isMemberPresent) VividGreenBorder else InactiveTextColor,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.5.sp
+                                    )
+                                }
                             }
 
                             // Admin Edit / Delete (Manager Only)

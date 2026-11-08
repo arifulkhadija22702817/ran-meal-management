@@ -57,6 +57,7 @@ import androidx.credentials.CredentialManager
 import com.example.data.repository.MessRepository
 import com.example.ui.Language
 import com.example.ui.MessViewModel
+import com.example.ui.components.AdminDirectLoginDialog
 import com.example.ui.components.MessTopBar
 import com.example.ui.components.NavigationTabRow
 import com.example.ui.screens.AdminAuditScreen
@@ -162,6 +163,9 @@ fun AppRoot() {
             onClaimInitialAdmin = { password, onSuccess, onFailure ->
                 viewModel.claimInitialAdmin(password, onSuccess, onFailure)
             },
+            onRecoverAdminPassword = { newPassword, onSuccess, onFailure ->
+                viewModel.recoverAdminPassword(newPassword, onSuccess, onFailure)
+            },
             onVerifyAdminPasswordAsync = { password, onSuccess, onFailure ->
                 viewModel.verifyAdminPassword(password, onSuccess, onFailure)
             },
@@ -186,8 +190,7 @@ fun MainAppContent(
     val snackbarHostState = remember { SnackbarHostState() }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showPasswordDialog by remember { mutableStateOf(false) }
-    var showInitialClaimDialog by remember { mutableStateOf(false) }
-    var showNotAdminAlert by remember { mutableStateOf(false) }
+    var showRecoveryDialog by remember { mutableStateOf(false) }
 
     val mess by viewModel.messState.collectAsState()
     val members by viewModel.membersState.collectAsState()
@@ -206,110 +209,78 @@ fun MainAppContent(
     val language by viewModel.currentLanguage.collectAsState()
     val userMessage by viewModel.userMessage.collectAsState()
 
-    val isAdmin = viewModel.isUserAdmin(mess)
+    val isAdmin by viewModel.isUserAdminFlow.collectAsState()
     val available45Dates = remember(selectedDate) { viewModel.getAvailable45Dates() }
 
     val currentAuthUser = Firebase.auth.currentUser
     val currentEmail = currentAuthUser?.email?.trim()?.lowercase() ?: ""
     val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
 
-    val isManagerUnassigned = managerEmail.isBlank() ||
-            managerEmail == "manager_placeholder" ||
-            managerEmail.contains("placeholder")
+    val hasAdminConfigured = !mess?.managerEmail.isNullOrBlank() &&
+            !mess?.adminPassword.isNullOrBlank() &&
+            !mess?.managerEmail?.contains("placeholder")!!
 
     val isRegisteredManager = currentEmail.isNotBlank() &&
             managerEmail.isNotBlank() &&
             currentEmail.equals(managerEmail, ignoreCase = true)
 
     LaunchedEffect(showAdmin3TierDialogInitial) {
-        if (showAdmin3TierDialogInitial) {
-            if (isManagerUnassigned) {
-                showInitialClaimDialog = true
-            } else if (isRegisteredManager) {
-                showPasswordDialog = true
-            }
+        if (showAdmin3TierDialogInitial && isRegisteredManager) {
+            showPasswordDialog = true
         }
     }
 
     val requestAdminUnlock = {
-        if (isManagerUnassigned) {
-            showInitialClaimDialog = true
-            onRequestAdminDialog()
-        } else if (isRegisteredManager) {
-            showPasswordDialog = true
-            onRequestAdminDialog()
-        } else {
-            showNotAdminAlert = true
-        }
+        showPasswordDialog = true
+        onRequestAdminDialog()
     }
 
-    if (showPasswordDialog && currentAuthUser?.email != null) {
-        AdminPasswordVerificationDialog(
-            targetEmail = currentAuthUser.email!!,
+    if (showPasswordDialog) {
+        AdminDirectLoginDialog(
+            initialEmail = currentAuthUser?.email ?: "",
+            currentConfiguredEmail = managerEmail,
             language = language,
             onDismiss = {
                 showPasswordDialog = false
                 onDismissAdminDialog()
             },
-            onVerifyPassword = { password, onSuccess, onFailure ->
-                viewModel.verifyAdminPassword(password, onSuccess, onFailure)
+            onVerifyAdminCredentials = { email, password, onSuccess, onFailure ->
+                viewModel.verifyAdminCredentials(email, password, onSuccess, onFailure)
             },
             onSuccess = {
                 showPasswordDialog = false
                 onDismissAdminDialog()
                 viewModel.setAdminAuthenticated(true)
+            },
+            onForgotPassword = {
+                showPasswordDialog = false
+                showRecoveryDialog = true
             }
         )
     }
 
-    if (showInitialClaimDialog && currentAuthUser?.email != null) {
-        InitialAdminClaimDialog(
-            userEmail = currentAuthUser.email!!,
+    if (showRecoveryDialog) {
+        val recoveryTargetEmail = if (managerEmail.isNotBlank()) managerEmail else "arifulislamsaju.sdp@gmail.com"
+        com.example.ui.components.AdminPasswordRecoveryDialog(
+            targetEmail = recoveryTargetEmail,
             language = language,
             onDismiss = {
-                showInitialClaimDialog = false
+                showRecoveryDialog = false
                 onDismissAdminDialog()
             },
-            onClaimAdmin = { password, onSuccess, onFailure ->
-                viewModel.claimInitialAdmin(password, onSuccess, onFailure)
+            onRequestOtp = { email, onSent ->
+                viewModel.requestAdminOtp(email, onSent)
+            },
+            onVerifyOtp = { code, email, onSuccess, onFailure ->
+                viewModel.verifyAdminOtp(code, email, onSuccess, onFailure)
+            },
+            onRecoverPassword = { newPassword, onSuccess, onFailure ->
+                viewModel.recoverAdminPassword(newPassword, onSuccess, onFailure)
             },
             onSuccess = {
-                showInitialClaimDialog = false
+                showRecoveryDialog = false
                 onDismissAdminDialog()
                 viewModel.setAdminAuthenticated(true)
-            }
-        )
-    }
-
-    if (showNotAdminAlert) {
-        AlertDialog(
-            onDismissRequest = { showNotAdminAlert = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Default.AdminPanelSettings,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(28.dp)
-                )
-            },
-            title = {
-                Text(
-                    text = if (language == Language.BENGALI) "অ্যাডমিন অনুমতি নেই" else "Not Authorized",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Text(
-                    text = if (language == Language.BENGALI)
-                        "আপনার বর্তমান জিমেইল (${currentAuthUser?.email}) এই মেসের নিবন্ধিত অ্যাডমিনের (${mess?.managerEmail ?: "নির্ধারিত জিমেইল"}) সাথে মেলেনি।"
-                    else
-                        "Your current signed-in Gmail does not match the designated mess manager."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { showNotAdminAlert = false }) {
-                    Text(text = if (language == Language.BENGALI) "ঠিক আছে" else "OK")
-                }
             }
         )
     }
@@ -345,8 +316,8 @@ fun MainAppContent(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Helper Banner for Manager / Unassigned mess who hasn't unlocked admin yet
-            if (!isAdmin && (isRegisteredManager || isManagerUnassigned)) {
+            // Helper Banner for Manager who hasn't unlocked admin yet
+            if (!isAdmin && isRegisteredManager) {
                 Surface(
                     color = AmberSecondary.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(10.dp),
@@ -373,17 +344,10 @@ fun MainAppContent(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (isManagerUnassigned) {
-                                    if (language == Language.BENGALI)
-                                        "এই মেসে কোনো অ্যাডমিন নির্ধারিত নেই। প্রথম অ্যাডমিন হতে পাসওয়ার্ড তৈরি করুন।"
-                                    else
-                                        "No manager assigned. Set up password to become the first manager."
-                                } else {
-                                    if (language == Language.BENGALI)
-                                        "আপনি মেসের নিবন্ধিত অ্যাডমিন। পূর্ণ নিয়ন্ত্রণ পেতে অ্যাডমিন পাসওয়ার্ড দিয়ে আনলক করুন।"
-                                    else
-                                        "You are the registered manager. Unlock with your admin password."
-                                },
+                                text = if (language == Language.BENGALI)
+                                    "আপনি মেসের নিবন্ধিত অ্যাডমিন। পূর্ণ নিয়ন্ত্রণ পেতে অ্যাডমিন পাসওয়ার্ড দিয়ে আনলক করুন।"
+                                else
+                                    "You are the registered manager. Unlock with your admin password.",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -401,6 +365,7 @@ fun MainAppContent(
                     }
                 }
             }
+
 
             NavigationTabRow(
                 selectedTabIndex = selectedTabIndex,

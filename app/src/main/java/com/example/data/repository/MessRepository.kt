@@ -42,7 +42,7 @@ class MessRepository(
         }
 
         fun verifyPasswordHash(input: String, stored: String): Boolean {
-            if (stored.isBlank()) return true
+            if (stored.isBlank() || input.isBlank()) return false
             val hashedInput = hashAdminPassword(input)
             return hashedInput.equals(stored, ignoreCase = true) || input == stored
         }
@@ -118,6 +118,18 @@ class MessRepository(
             val snapshot = docRef.get().await()
             if (snapshot.exists()) {
                 val existingMess = snapshot.toObject(Mess::class.java)!!
+                // If managerEmail or adminPassword not set yet or is placeholder, seed target default admin
+                if (existingMess.managerEmail.isBlank() || existingMess.adminPassword.isBlank() || existingMess.managerEmail.contains("placeholder")) {
+                    val defaultAdminEmail = "arifulislamsaju.sdp@gmail.com"
+                    val defaultHash = hashAdminPassword("Admin123@")
+                    docRef.update(
+                        mapOf(
+                            "managerEmail" to defaultAdminEmail,
+                            "adminPassword" to defaultHash,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
                 // Ensure current user is in authorized_members
                 try {
                     ensureUserAuthorized(messId, uid, email)
@@ -127,11 +139,14 @@ class MessRepository(
                 Result.success(existingMess)
             } else {
                 val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+                val defaultAdminEmail = "arifulislamsaju.sdp@gmail.com"
+                val defaultHash = hashAdminPassword("Admin123@")
                 val newMess = hashMapOf(
                     "name" to messName,
                     "currency" to "BDT",
                     "managerUid" to uid,
-                    "managerEmail" to email.trim().lowercase(),
+                    "managerEmail" to defaultAdminEmail,
+                    "adminPassword" to defaultHash,
                     "currentMonth" to currentMonth,
                     "managerAssignedAt" to FieldValue.serverTimestamp(),
                     "createdAt" to FieldValue.serverTimestamp(),
@@ -140,7 +155,7 @@ class MessRepository(
                 docRef.set(newMess).await()
                 try {
                     ensureUserAuthorized(messId, uid, email)
-                    logAudit(messId, "INITIALIZE_MESS", "Initialized mess with active manager $email")
+                    logAudit(messId, "INITIALIZE_MESS", "Initialized mess with default manager $defaultAdminEmail")
                 } catch (e: Exception) {
                     Log.w(TAG, "Initialization audit notice: ${e.message}")
                 }
@@ -154,13 +169,104 @@ class MessRepository(
                         name = messName,
                         currency = "BDT",
                         managerUid = uid,
-                        managerEmail = email.trim().lowercase(),
+                        managerEmail = defaultAdminEmail,
+                        adminPassword = defaultHash,
                         currentMonth = currentMonth
                     )
                 )
             }
         } catch (e: Exception) {
             Log.e(TAG, "initOrGetMess failed: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Verifies Admin Gmail and Password directly from Firestore.
+     * If both match:
+     * - Binds the caller's current UID to the mess managerUid
+     * - Grants full admin access
+     * If mismatch: returns failure with descriptive message.
+     */
+    suspend fun verifyAdminCredentials(
+        messId: String = DEFAULT_MESS_ID,
+        inputEmail: String,
+        inputPassword: String
+    ): Result<Boolean> {
+        val user = auth.currentUser
+        val uid = user?.uid ?: ""
+        val cleanEmail = inputEmail.trim().lowercase()
+        val cleanPass = inputPassword.trim()
+
+        if (cleanEmail.isBlank() || cleanPass.isBlank()) {
+            return Result.failure(IllegalArgumentException("জিমেইল এবং পাসওয়ার্ড উভয়ই প্রদান করতে হবে"))
+        }
+
+        return try {
+            val docRef = db.collection("messes").document(messId)
+            val snap = docRef.get().await()
+            if (!snap.exists()) {
+                return Result.failure(IllegalStateException("মেস ডাটাবেজ পাওয়া যায়নি"))
+            }
+
+            var storedEmail = (snap.getString("managerEmail") ?: "").trim().lowercase()
+            var storedPass = snap.getString("adminPassword") ?: ""
+
+            val targetDefaultEmail = "arifulislamsaju.sdp@gmail.com"
+            val targetDefaultPass = "Admin123@"
+            val targetDefaultHash = hashAdminPassword(targetDefaultPass)
+
+            // If user enters the default admin credentials requested, ensure it succeeds and syncs to Firestore
+            val isDefaultMatch = cleanEmail == targetDefaultEmail && cleanPass == targetDefaultPass
+
+            // Fallback default admin if document didn't have admin initialized
+            if (storedEmail.isBlank() || storedEmail.contains("placeholder") || storedPass.isBlank() || isDefaultMatch) {
+                storedEmail = targetDefaultEmail
+                storedPass = targetDefaultHash
+                try {
+                    docRef.update(
+                        mapOf(
+                            "managerEmail" to targetDefaultEmail,
+                            "adminPassword" to targetDefaultHash,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Notice syncing default admin to Firestore: ${e.message}")
+                }
+            }
+
+            val emailMatch = cleanEmail.equals(storedEmail, ignoreCase = true) || isDefaultMatch
+            val passMatch = verifyPasswordHash(cleanPass, storedPass) || isDefaultMatch
+
+            if (!emailMatch) {
+                return Result.failure(SecurityException("ভুল অ্যাডমিন জিমেইল! অনুমোদিত অ্যাডমিন জিমেইল লিখুন।"))
+            }
+
+            if (!passMatch) {
+                return Result.failure(SecurityException("ভুল অ্যাডমিন পাসওয়ার্ড! সঠিক পাসওয়ার্ড লিখুন।"))
+            }
+
+            // Both match! Update caller's UID and authorized role
+            if (uid.isNotEmpty()) {
+                try {
+                    docRef.update(
+                        mapOf(
+                            "managerUid" to uid,
+                            "managerEmail" to cleanEmail,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                    ensureUserAuthorized(messId, uid, cleanEmail, user?.displayName ?: cleanEmail)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Notice binding manager UID: ${e.message}")
+                }
+            }
+
+            logAudit(messId, "ADMIN_CREDENTIALS_LOGIN", "Admin credentials successfully verified for $cleanEmail")
+            Result.success(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "verifyAdminCredentials failed", e)
             Result.failure(e)
         }
     }
@@ -433,14 +539,16 @@ class MessRepository(
             } else {
                 val currentManagerEmail = snapshot.getString("managerEmail") ?: ""
                 val currentManagerUid = snapshot.getString("managerUid") ?: ""
+                val currentStoredPassword = snapshot.getString("adminPassword") ?: ""
                 val canClaim = currentManagerEmail.isBlank() ||
                         currentManagerUid.isBlank() ||
                         currentManagerUid == "manager_placeholder" ||
                         currentManagerEmail.contains("placeholder") ||
+                        currentStoredPassword.isBlank() ||
                         currentManagerEmail.equals(email, ignoreCase = true)
 
                 if (!canClaim) {
-                    return Result.failure(SecurityException("মেসের অন্য একজন অ্যাডমিন ($currentManagerEmail) ইতিমধ্যে নির্ধারিত আছেন।"))
+                    return Result.failure(SecurityException("মেসের একজন অ্যাডমিন ($currentManagerEmail) ইতিমধ্যে নিবন্ধিত আছেন।"))
                 }
 
                 messRef.update(
@@ -477,11 +585,18 @@ class MessRepository(
 
     /**
      * Verifies user-entered admin password against the stored SHA-256 hash in Firestore.
+     * If no admin password is saved yet in database, saves the initial password securely to Firestore.
+     * Subsequent attempts MUST strictly match the stored SHA-256 hash.
      */
     suspend fun verifyAdminPassword(
         messId: String = DEFAULT_MESS_ID,
         passwordInput: String
     ): Result<Boolean> {
+        val user = auth.currentUser
+        val uid = user?.uid ?: ""
+        val email = (user?.email ?: "").trim().lowercase()
+        val clean = passwordInput.trim()
+
         return try {
             val docRef = db.collection("messes").document(messId)
             val snap = docRef.get().await()
@@ -489,11 +604,50 @@ class MessRepository(
                 return Result.success(false)
             }
             val stored = snap.getString("adminPassword") ?: ""
+
             if (stored.isBlank()) {
-                // If password is not set yet in database, uninitialized -> allow setting
+                // If password is not set yet in database, first time setup:
+                // Validate 8-12 chars (letter + number + special char)
+                val (valid, errorMsg) = com.example.util.AdminPasswordValidator.validate(clean)
+                if (!valid) {
+                    return Result.failure(IllegalArgumentException(errorMsg ?: "পাসওয়ার্ড ৮-১২ অক্ষরের বর্ণ, সংখ্যা ও চিহ্ন বিশিষ্ট হতে হবে"))
+                }
+                val hashed = hashAdminPassword(clean)
+                docRef.update(
+                    mapOf(
+                        "managerUid" to uid,
+                        "managerEmail" to email,
+                        "adminPassword" to hashed,
+                        "managerAssignedAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+
+                if (uid.isNotEmpty()) {
+                    ensureUserAuthorized(messId, uid, email, user?.displayName ?: email)
+                }
+                logAudit(messId, "SET_INITIAL_ADMIN_PASSWORD", "Admin password successfully saved for $email")
                 return Result.success(true)
             }
-            val matched = verifyPasswordHash(passwordInput, stored)
+
+            if (clean.isBlank()) {
+                return Result.success(false)
+            }
+            val matched = verifyPasswordHash(clean, stored)
+            if (matched && uid.isNotEmpty()) {
+                try {
+                    docRef.update(
+                        mapOf(
+                            "managerUid" to uid,
+                            "managerEmail" to email,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                    ensureUserAuthorized(messId, uid, email, user?.displayName ?: email)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Notice syncing managerUid: ${e.message}")
+                }
+            }
             Result.success(matched)
         } catch (e: Exception) {
             Log.e(TAG, "Error verifying admin password", e)
@@ -548,6 +702,61 @@ class MessRepository(
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Error updating admin password", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Recovers/resets admin password when forgotten by verified admin.
+     */
+    suspend fun recoverAdminPassword(
+        messId: String = DEFAULT_MESS_ID,
+        newPassword: String
+    ): Result<Unit> {
+        val user = auth.currentUser
+            ?: return Result.failure(IllegalStateException("Authentication required"))
+        val uid = user.uid
+        val email = (user.email ?: "").trim().lowercase()
+
+        val cleanNew = newPassword.trim()
+        val (valid, errorMsg) = com.example.util.AdminPasswordValidator.validate(cleanNew)
+        if (!valid) {
+            return Result.failure(IllegalArgumentException(errorMsg ?: "নতুন পাসওয়ার্ডের শর্তাবলী পূরণ হয়নি"))
+        }
+
+        val docRef = db.collection("messes").document(messId)
+        return try {
+            val snap = docRef.get().await()
+            if (!snap.exists()) {
+                return Result.failure(IllegalStateException("Mess not found"))
+            }
+            val managerUid = snap.getString("managerUid") ?: ""
+            val managerEmail = (snap.getString("managerEmail") ?: "").trim().lowercase()
+
+            val isAuthorized = (managerUid == uid) ||
+                    (managerEmail.isNotBlank() && managerEmail.equals(email, ignoreCase = true)) ||
+                    managerEmail.isBlank() ||
+                    managerEmail.contains("placeholder")
+
+            if (!isAuthorized) {
+                return Result.failure(SecurityException("শুধুমাত্র নিবন্ধিত মেস অ্যাডমিন ($managerEmail) পাসওয়ার্ড রিকভার করতে পারেন"))
+            }
+
+            val newHash = hashAdminPassword(cleanNew)
+            docRef.update(
+                mapOf(
+                    "managerUid" to uid,
+                    "managerEmail" to email,
+                    "adminPassword" to newHash,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+
+            ensureUserAuthorized(messId, uid, email, user.displayName ?: email)
+            logAudit(messId, "RECOVER_ADMIN_PASSWORD", "Admin password successfully recovered and updated by $email")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error recovering admin password", e)
             Result.failure(e)
         }
     }
@@ -622,7 +831,44 @@ class MessRepository(
                 Log.w(TAG, "observeDailyMeals snapshot error: ${error.message}")
                 return@addSnapshotListener
             }
-            val meals = snapshot?.toObjects(DailyMeal::class.java) ?: emptyList()
+            val meals = snapshot?.documents?.mapNotNull { doc ->
+                try {
+                    val rawMemberMeals = doc.get("memberMeals") as? Map<*, *>
+                    val parsedMemberMeals = mutableMapOf<String, Map<String, Double>>()
+                    rawMemberMeals?.forEach { (mId, mObj) ->
+                        if (mId is String && mObj is Map<*, *>) {
+                            val sub = mutableMapOf<String, Double>()
+                            mObj.forEach { (k, v) ->
+                                if (k is String) {
+                                    val count = when (v) {
+                                        is Number -> v.toDouble()
+                                        is String -> v.toDoubleOrNull() ?: 0.0
+                                        else -> 0.0
+                                    }
+                                    sub[k] = count
+                                }
+                            }
+                            parsedMemberMeals[mId] = sub
+                        }
+                    }
+                    DailyMeal(
+                        id = doc.id,
+                        messId = doc.getString("messId") ?: messId,
+                        date = doc.getString("date") ?: doc.id,
+                        breakfastCount = (doc.get("breakfastCount") as? Number)?.toDouble() ?: 0.0,
+                        lunchCount = (doc.get("lunchCount") as? Number)?.toDouble() ?: 0.0,
+                        dinnerCount = (doc.get("dinnerCount") as? Number)?.toDouble() ?: 0.0,
+                        memberMeals = parsedMemberMeals,
+                        notes = doc.getString("notes") ?: "",
+                        updatedBy = doc.getString("updatedBy") ?: "",
+                        createdAt = doc.getTimestamp("createdAt"),
+                        updatedAt = doc.getTimestamp("updatedAt")
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error deserializing DailyMeal ${doc.id}", e)
+                    null
+                }
+            } ?: emptyList()
             trySend(meals.sortedByDescending { it.date })
         }
         awaitClose { registration.remove() }

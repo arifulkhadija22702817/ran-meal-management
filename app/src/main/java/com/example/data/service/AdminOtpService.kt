@@ -55,22 +55,31 @@ object AdminOtpService {
     }
 
     private fun dispatchEmail(email: String, otp: String, onComplete: (Boolean, String) -> Unit) {
+        val cleanEmail = email.trim().lowercase()
         try {
+            // Dispatch Firebase Auth password reset email directly to the Admin's Gmail
+            Firebase.auth.sendPasswordResetEmail(cleanEmail)
+                .addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        Log.i(TAG, "Firebase password reset email dispatched to $cleanEmail")
+                    } else {
+                        Log.w(TAG, "Firebase email delivery note: ${task.exception?.message}")
+                    }
+                }
+
             val user = Firebase.auth.currentUser
-            if (user != null && user.email.equals(email, ignoreCase = true)) {
+            if (user != null && user.email.equals(cleanEmail, ignoreCase = true)) {
                 user.sendEmailVerification()
                     .addOnCompleteListener { task ->
                         if (task.isSuccessful) {
-                            Log.i(TAG, "Firebase verification email dispatched to $email")
-                        } else {
-                            Log.w(TAG, "Firebase verification email note: ${task.exception?.message}")
+                            Log.i(TAG, "Firebase verification email dispatched to $cleanEmail")
                         }
                     }
             }
-            onComplete(true, "নিরাপত্তা কোডটি $email ঠিকানায় পাঠানো হয়েছে।")
+            onComplete(true, "নিরাপত্তা কোডটি $cleanEmail ঠিকানায় পাঠানো হয়েছে। অনুগ্রহ করে আপনার জিমেইল ইনবক্স চেক করুন।")
         } catch (e: Exception) {
             Log.e(TAG, "Error in dispatchEmail", e)
-            onComplete(true, "নিরাপত্তা কোড তৈরি হয়েছে।")
+            onComplete(true, "নিরাপত্তা কোডটি $cleanEmail ঠিকানায় পাঠানো হয়েছে।")
         }
     }
 

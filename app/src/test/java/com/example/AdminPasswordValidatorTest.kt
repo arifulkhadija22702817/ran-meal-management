@@ -56,4 +56,24 @@ class AdminPasswordValidatorTest {
         assertFalse(valid)
         assertTrue(err?.contains("স্পেশাল") == true || err?.contains("Special") == true)
     }
+
+    @Test
+    fun testPasswordHashingAndVerification() {
+        val plain = "Admin@123"
+        val hash = com.example.data.repository.MessRepository.hashAdminPassword(plain)
+        assertTrue("Hash should not be empty", hash.isNotBlank())
+        assertEquals("SHA-256 hex string should be 64 characters", 64, hash.length)
+
+        // Exact match should pass
+        assertTrue(com.example.data.repository.MessRepository.verifyPasswordHash(plain, hash))
+
+        // Wrong password should fail
+        assertFalse(com.example.data.repository.MessRepository.verifyPasswordHash("WrongPass@99", hash))
+
+        // Blank stored password must strictly fail (never allow unassigned password access)
+        assertFalse(com.example.data.repository.MessRepository.verifyPasswordHash(plain, ""))
+        assertFalse(com.example.data.repository.MessRepository.verifyPasswordHash("", hash))
+        assertFalse(com.example.data.repository.MessRepository.verifyPasswordHash("", ""))
+    }
 }
+

@@ -59,6 +59,7 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
 import com.example.data.model.Mess
 import com.example.ui.Language
+import com.example.ui.components.AdminPasswordRecoveryDialog
 import com.example.ui.components.AdminPasswordVerificationDialog
 import com.example.ui.components.InitialAdminClaimDialog
 import com.example.ui.theme.AmberSecondary
@@ -81,6 +82,7 @@ fun AuthScreen(
     onVerifyAdminPassword: (password: String) -> Boolean = { true },
     onVerifyAdminPasswordAsync: (password: String, onSuccess: () -> Unit, onFailure: (String) -> Unit) -> Unit = { _, s, _ -> s() },
     onClaimInitialAdmin: (initialPassword: String, onSuccess: () -> Unit, onFailure: (String) -> Unit) -> Unit = { _, s, _ -> s() },
+    onRecoverAdminPassword: (newPassword: String, onSuccess: () -> Unit, onFailure: (String) -> Unit) -> Unit = { _, s, _ -> s() },
     onChangePassword: (newPass: String) -> Unit = {},
     onResetPasswordWithEmail: (email: String, newPass: String) -> Boolean = { _, _ -> true },
     onMemberAuthSuccess: () -> Unit = {},
@@ -97,27 +99,30 @@ fun AuthScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showPasswordDialog by remember { mutableStateOf(false) }
-    var showInitialAdminClaimDialog by remember { mutableStateOf(false) }
+    var showInitialAdminDialog by remember { mutableStateOf(false) }
+    var showRecoveryDialog by remember { mutableStateOf(false) }
     var adminTargetEmail by remember { mutableStateOf("") }
+    var signedInUserEmailForInitialClaim by remember { mutableStateOf("") }
 
     val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
-    val isManagerUnassigned = managerEmail.isBlank() ||
-            managerEmail == "manager_placeholder" ||
-            managerEmail.contains("placeholder")
+    val hasAdminConfigured = !mess?.managerEmail.isNullOrBlank() &&
+            !mess?.adminPassword.isNullOrBlank() &&
+            !mess?.managerEmail?.contains("placeholder")!!
 
-    // Initial Admin Setup Dialog (Shown ONLY when no admin is assigned yet)
-    if (showInitialAdminClaimDialog) {
+    // Initial Admin Claim Dialog (When no admin exists yet in Firebase)
+    if (showInitialAdminDialog && signedInUserEmailForInitialClaim.isNotBlank()) {
         InitialAdminClaimDialog(
-            userEmail = adminTargetEmail,
+            userEmail = signedInUserEmailForInitialClaim,
             language = language,
             onDismiss = {
-                showInitialAdminClaimDialog = false
+                showInitialAdminDialog = false
+                onMemberAuthSuccess()
             },
             onClaimAdmin = { initialPassword, onSuccess, onFailure ->
                 onClaimInitialAdmin(initialPassword, onSuccess, onFailure)
             },
             onSuccess = {
-                showInitialAdminClaimDialog = false
+                showInitialAdminDialog = false
                 onAdminAuthSuccess()
             }
         )
@@ -130,12 +135,43 @@ fun AuthScreen(
             language = language,
             onDismiss = {
                 showPasswordDialog = false
+                // "onnothay user access pabe" -> If dismissed/cancelled, enter as regular member
+                onMemberAuthSuccess()
             },
             onVerifyPassword = { password, onSuccess, onFailure ->
                 onVerifyAdminPasswordAsync(password, onSuccess, onFailure)
             },
             onSuccess = {
                 showPasswordDialog = false
+                onAdminAuthSuccess()
+            },
+            onForgotPassword = {
+                showPasswordDialog = false
+                showRecoveryDialog = true
+            }
+        )
+    }
+
+    // Professional Admin Password Recovery Dialog (Forgot Password)
+    if (showRecoveryDialog) {
+        AdminPasswordRecoveryDialog(
+            targetEmail = if (adminTargetEmail.isNotBlank()) adminTargetEmail else managerEmail,
+            language = language,
+            onDismiss = {
+                showRecoveryDialog = false
+                onMemberAuthSuccess()
+            },
+            onRequestOtp = { email, onSent ->
+                onRequestAdminOtp(email, onSent)
+            },
+            onVerifyOtp = { code, email, onSuccess, onFailure ->
+                onVerifyAdminOtp(code, email, onSuccess, onFailure)
+            },
+            onRecoverPassword = { newPassword, onSuccess, onFailure ->
+                onRecoverAdminPassword(newPassword, onSuccess, onFailure)
+            },
+            onSuccess = {
+                showRecoveryDialog = false
                 onAdminAuthSuccess()
             }
         )
@@ -218,7 +254,7 @@ fun AuthScreen(
                     .widthIn(max = 440.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // PRIMARY SIGN-IN BUTTON: "গুগল দিয়ে প্রবেশ করুন" (For all users / members / existing admin)
+                // PRIMARY SIGN-IN BUTTON: "গুগল দিয়ে প্রবেশ করুন" (For all users / members -> gets user access)
                 Card(
                     onClick = {
                         isLoading = true
@@ -229,17 +265,8 @@ fun AuthScreen(
                             coroutineScope = coroutineScope,
                             onSuccess = {
                                 isLoading = false
-                                val user = Firebase.auth.currentUser
-                                val userEmail = user?.email?.trim()?.lowercase() ?: ""
-
-                                if (!isManagerUnassigned && userEmail.isNotBlank() && userEmail.equals(managerEmail, ignoreCase = true)) {
-                                    // User IS the registered Admin Gmail -> prompt for admin password
-                                    adminTargetEmail = userEmail
-                                    onAdminAuthRequested()
-                                } else {
-                                    // User is a member
-                                    onMemberAuthSuccess()
-                                }
+                                // "1st. sudhu login option thakbe gmail diye. tahole user access pabe."
+                                onMemberAuthSuccess()
                             },
                             onError = { err ->
                                 isLoading = false
@@ -299,6 +326,14 @@ fun AuthScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
+                            Text(
+                                text = if (language == Language.BENGALI)
+                                    "মেস মিল ও খরচের হিসাব দেখতে প্রবেশ করুন"
+                                else
+                                    "Sign in to view meals and expenses",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.85f)
+                            )
                         }
                         Icon(
                             imageVector = Icons.Default.ChevronRight,
@@ -306,87 +341,6 @@ fun AuthScreen(
                             tint = Color.White.copy(alpha = 0.8f),
                             modifier = Modifier.size(24.dp)
                         )
-                    }
-                }
-
-                // INITIAL ADMIN SETUP CARD:
-                // AUTOMATICALLY UNHIDDEN when no admin is assigned (isManagerUnassigned == true)
-                // AUTOMATICALLY HIDDEN when an admin already exists (isManagerUnassigned == false)
-                if (isManagerUnassigned) {
-                    Card(
-                        onClick = {
-                            isLoading = true
-                            errorMessage = null
-                            performGoogleSignIn(
-                                context = context,
-                                credentialManager = credentialManager,
-                                coroutineScope = coroutineScope,
-                                onSuccess = {
-                                    isLoading = false
-                                    val user = Firebase.auth.currentUser
-                                    val userEmail = user?.email?.trim()?.lowercase() ?: ""
-                                    adminTargetEmail = userEmail
-                                    showInitialAdminClaimDialog = true
-                                    onAdminAuthRequested()
-                                },
-                                onError = { err ->
-                                    isLoading = false
-                                    errorMessage = err
-                                },
-                                onCancelled = {
-                                    isLoading = false
-                                }
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("admin_login_portal_btn"),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = AmberSecondary
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp, pressedElevation = 1.dp),
-                        enabled = !isLoading
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 18.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.25f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.AdminPanelSettings,
-                                    contentDescription = "Admin Setup",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (language == Language.BENGALI)
-                                        "মেসের প্রথম অ্যাডমিন অ্যাকাউন্ট তৈরি"
-                                    else
-                                        "Create Initial Mess Admin",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                            Icon(
-                                imageVector = Icons.Default.ChevronRight,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.8f),
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
                     }
                 }
             }
