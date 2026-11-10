@@ -247,21 +247,22 @@ class MessViewModel(
         val isUidMatch = uid.isNotEmpty() && uid == managerUid
         val isEmailMatch = userEmail.isNotEmpty() && managerEmail.isNotEmpty() && userEmail == managerEmail
 
-        if (uid.isNotEmpty() && (!isUidMatch || managerEmail.isEmpty() || managerEmail.contains("placeholder"))) {
+        if (uid.isNotEmpty() && !isUidMatch) {
             viewModelScope.launch {
                 try {
+                    val updateMap = mutableMapOf<String, Any>(
+                        "managerUid" to uid,
+                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                    )
+                    if (managerEmail.isEmpty() || managerEmail.contains("placeholder")) {
+                        updateMap["managerEmail"] = userEmail
+                    }
                     repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
-                        .update(
-                            mapOf(
-                                "managerUid" to uid,
-                                "managerEmail" to userEmail,
-                                "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                            )
-                        )
+                        .update(updateMap)
                     repository.ensureUserAuthorized(
                         messId = MessRepository.DEFAULT_MESS_ID,
                         uid = uid,
-                        email = userEmail,
+                        email = if (managerEmail.isNotBlank() && !managerEmail.contains("placeholder")) managerEmail else userEmail,
                         displayName = repository.auth.currentUser?.displayName ?: userEmail
                     )
                 } catch (e: Exception) {
@@ -1011,7 +1012,13 @@ class MessViewModel(
         onDone: (Boolean) -> Unit
     ) {
         val storedPass = messState.value?.adminPassword ?: ""
-        if (storedPass.isNotBlank() && !MessRepository.verifyPasswordHash(currentPassword, storedPass)) {
+        val isValid = if (storedPass.isBlank()) {
+            currentPassword.trim() == "Admin123@" || currentPassword.isBlank()
+        } else {
+            MessRepository.verifyPasswordHash(currentPassword.trim(), storedPass) ||
+            (storedPass == MessRepository.hashAdminPassword("Admin123@") && currentPassword.trim() == "Admin123@")
+        }
+        if (!isValid) {
             _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                 "ভুল বর্তমান অ্যাডমিন পাসওয়ার্ড!"
             else

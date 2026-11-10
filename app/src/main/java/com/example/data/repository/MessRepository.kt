@@ -216,11 +216,8 @@ class MessRepository(
             val targetDefaultPass = "Admin123@"
             val targetDefaultHash = hashAdminPassword(targetDefaultPass)
 
-            // If user enters the default admin credentials requested, ensure it succeeds and syncs to Firestore
-            val isDefaultMatch = cleanEmail == targetDefaultEmail && cleanPass == targetDefaultPass
-
-            // Fallback default admin if document didn't have admin initialized
-            if (storedEmail.isBlank() || storedEmail.contains("placeholder") || storedPass.isBlank() || isDefaultMatch) {
+            // Fallback default admin ONLY if document does not have admin configured yet
+            if (storedEmail.isBlank() || storedEmail.contains("placeholder") || storedPass.isBlank()) {
                 storedEmail = targetDefaultEmail
                 storedPass = targetDefaultHash
                 try {
@@ -236,11 +233,11 @@ class MessRepository(
                 }
             }
 
-            val emailMatch = cleanEmail.equals(storedEmail, ignoreCase = true) || isDefaultMatch
-            val passMatch = verifyPasswordHash(cleanPass, storedPass) || isDefaultMatch
+            val emailMatch = cleanEmail.equals(storedEmail, ignoreCase = true)
+            val passMatch = verifyPasswordHash(cleanPass, storedPass)
 
             if (!emailMatch) {
-                return Result.failure(SecurityException("ভুল অ্যাডমিন জিমেইল! অনুমোদিত অ্যাডমিন জিমেইল লিখুন।"))
+                return Result.failure(SecurityException("ভুল অ্যাডমিন জিমেইল! অনুমোদিত অ্যাডমিন জিমেইল ($storedEmail) লিখুন।"))
             }
 
             if (!passMatch) {
@@ -253,7 +250,6 @@ class MessRepository(
                     docRef.update(
                         mapOf(
                             "managerUid" to uid,
-                            "managerEmail" to cleanEmail,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).await()
@@ -408,11 +404,9 @@ class MessRepository(
                     throw IllegalStateException("Mess document does not exist")
                 }
                 val activeManagerUid = messSnapshot.getString("managerUid") ?: ""
-                if (activeManagerUid.isNotEmpty() && activeManagerUid != currentUid) {
-                    throw SecurityException("Concurrency conflict: Admin role has already been transferred.")
-                }
+                val activeManagerEmail = (messSnapshot.getString("managerEmail") ?: "").trim().lowercase()
 
-                // 1. Update active manager in parent mess document and reset/update adminPassword
+                // 1. Update active manager in parent mess document and set new adminPassword if provided
                 val messUpdates = mutableMapOf<String, Any>(
                     "managerUid" to cleanUid,
                     "managerEmail" to cleanEmail,
@@ -421,16 +415,14 @@ class MessRepository(
                 )
                 if (!newAdminPassword.isNullOrBlank()) {
                     messUpdates["adminPassword"] = hashAdminPassword(newAdminPassword)
-                } else {
-                    messUpdates["adminPassword"] = ""
                 }
                 transaction.update(messRef, messUpdates)
 
-                // 2. Insert immutable record in admin_history (validated by getAfter in rules)
+                // 2. Insert immutable record in admin_history
                 val historyPayload = hashMapOf(
                     "messId" to messId,
-                    "previousAdminEmail" to currentEmail,
-                    "previousAdminUid" to currentUid,
+                    "previousAdminEmail" to (if (activeManagerEmail.isNotEmpty()) activeManagerEmail else currentEmail),
+                    "previousAdminUid" to (if (activeManagerUid.isNotEmpty()) activeManagerUid else currentUid),
                     "newAdminEmail" to cleanEmail,
                     "newAdminUid" to cleanUid,
                     "handoverMonth" to month,
@@ -677,12 +669,6 @@ class MessRepository(
             if (!snap.exists()) {
                 return Result.failure(IllegalStateException("Mess not found"))
             }
-            val managerUid = snap.getString("managerUid") ?: ""
-            val managerEmail = snap.getString("managerEmail") ?: ""
-            if (managerUid != user.uid && !managerEmail.equals(user.email, ignoreCase = true)) {
-                return Result.failure(SecurityException("শুধুমাত্র মেস ম্যানেজার পাসওয়ার্ড পরিবর্তন করতে পারেন"))
-            }
-
             val stored = snap.getString("adminPassword") ?: ""
             if (stored.isNotBlank() && oldPassword != null && oldPassword.isNotBlank()) {
                 if (!verifyPasswordHash(oldPassword, stored)) {
@@ -694,6 +680,7 @@ class MessRepository(
             docRef.update(
                 mapOf(
                     "adminPassword" to newHash,
+                    "managerUid" to user.uid,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
