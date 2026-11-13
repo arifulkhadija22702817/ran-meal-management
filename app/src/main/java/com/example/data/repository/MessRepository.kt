@@ -24,13 +24,15 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
 class MessRepository(
-    val db: FirebaseFirestore
+    val db: FirebaseFirestore,
+    private val prefs: android.content.SharedPreferences? = null
 ) {
     companion object {
         private const val TAG = "MessRepository"
@@ -70,8 +72,48 @@ class MessRepository(
             } catch (e: Exception) {
                 Log.w(TAG, "Persistent cache setting: ${e.message}")
             }
-            return MessRepository(firestore)
+            val sharedPrefs = context.applicationContext.getSharedPreferences(
+                "messmate_session_prefs",
+                Context.MODE_PRIVATE
+            )
+            return MessRepository(firestore, sharedPrefs)
         }
+    }
+
+    fun saveAdminSession(uid: String, email: String, passwordHash: String) {
+        prefs?.edit()
+            ?.putString("admin_uid", uid)
+            ?.putString("admin_email", email.trim().lowercase())
+            ?.putString("admin_pw_hash", passwordHash)
+            ?.putBoolean("admin_active", true)
+            ?.apply()
+    }
+
+    fun getSavedAdminSession(uid: String?, email: String?): Pair<String, String>? {
+        if (prefs == null || uid.isNullOrBlank() || email.isNullOrBlank()) return null
+        val active = prefs.getBoolean("admin_active", false)
+        if (!active) return null
+        val savedUid = prefs.getString("admin_uid", "") ?: ""
+        val savedEmail = prefs.getString("admin_email", "") ?: ""
+        val savedHash = prefs.getString("admin_pw_hash", "") ?: ""
+        val cleanEmail = email.trim().lowercase()
+        return if ((savedUid == uid || savedEmail.equals(cleanEmail, ignoreCase = true)) &&
+            savedEmail.equals(cleanEmail, ignoreCase = true)
+        ) {
+            Pair(savedEmail, savedHash)
+        } else {
+            null
+        }
+    }
+
+    fun updateSavedAdminPasswordHash(newPasswordHash: String) {
+        if (prefs?.getBoolean("admin_active", false) == true) {
+            prefs.edit().putString("admin_pw_hash", newPasswordHash).apply()
+        }
+    }
+
+    fun clearAdminSession() {
+        prefs?.edit()?.clear()?.apply()
     }
 
     val auth = Firebase.auth
@@ -82,6 +124,17 @@ class MessRepository(
     private fun requireUserId(): String {
         return auth.currentUser?.uid
             ?: "manager_placeholder"
+    }
+
+    /**
+     * Firestore writes persist immediately to the local disk cache and auto-sync when online.
+     * Using withTimeoutOrNull ensures offline writes complete cleanly in the UI instead of hanging
+     * while waiting for server ACK, while still catching immediate online permission/validation errors.
+     */
+    private suspend fun com.google.android.gms.tasks.Task<Void>.awaitOfflineSafe(timeoutMs: Long = 1200L) {
+        withTimeoutOrNull(timeoutMs) {
+            this@awaitOfflineSafe.await()
+        }
     }
 
     fun observeAuthUid(): Flow<String?> = callbackFlow {
@@ -227,6 +280,9 @@ class MessRepository(
                 }
             }
 
+            if (uid.isNotEmpty()) {
+                saveAdminSession(uid, cleanEmail, storedPass)
+            }
             try {
                 logAudit(messId, "ADMIN_CREDENTIALS_LOGIN", "Admin credentials successfully verified for $cleanEmail")
             } catch (e: Exception) {
@@ -441,6 +497,7 @@ class MessRepository(
                     SetOptions.merge()
                 )
             }.await()
+            clearAdminSession()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "transferManager failed", e)
@@ -556,6 +613,7 @@ class MessRepository(
             } catch (e: Exception) {
                 Log.w(TAG, "Audit log notice on claimInitialAdmin: ${e.message}")
             }
+            saveAdminSession(uid, email, hashedPassword)
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Error claiming initial admin", e)
@@ -604,7 +662,8 @@ class MessRepository(
                 ).await()
 
                 if (uid.isNotEmpty()) {
-                    ensureUserAuthorized(messId, uid, email, user?.displayName ?: email)
+                    ensureUserAuthorized(messId, uid, email, user?.displayName ?: email, "MANAGER")
+                    saveAdminSession(uid, email, hashed)
                 }
                 logAudit(messId, "SET_INITIAL_ADMIN_PASSWORD", "Admin password successfully saved for $email")
                 return Result.success(true)
@@ -620,6 +679,7 @@ class MessRepository(
             }
             val matched = verifyPasswordHash(clean, stored)
             if (matched && uid.isNotEmpty()) {
+                saveAdminSession(uid, email, stored)
                 try {
                     docRef.update(
                         mapOf(
@@ -678,6 +738,7 @@ class MessRepository(
                 )
             ).await()
 
+            updateSavedAdminPasswordHash(newHash)
             logAudit(messId, "CHANGE_ADMIN_PASSWORD", "Admin password changed successfully by ${user.email}")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -733,6 +794,7 @@ class MessRepository(
             ).await()
 
             ensureUserAuthorized(messId, uid, email, user.displayName ?: email)
+            saveAdminSession(uid, email, newHash)
             logAudit(messId, "RECOVER_ADMIN_PASSWORD", "Admin password successfully recovered and updated by $email")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -777,7 +839,7 @@ class MessRepository(
         }
 
         return try {
-            docRef.set(payload, SetOptions.merge()).await()
+            docRef.set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(messId, if (member.id.isBlank()) "ADD_MEMBER" else "EDIT_MEMBER", "Member: ${member.name}")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -788,7 +850,7 @@ class MessRepository(
 
     suspend fun deleteMember(messId: String, memberId: String, memberName: String): Result<Unit> {
         return try {
-            db.collection("messes").document(messId).collection("members").document(memberId).delete().await()
+            db.collection("messes").document(messId).collection("members").document(memberId).delete().awaitOfflineSafe()
             try {
                 logAudit(messId, "DELETE_MEMBER", "Deleted member: $memberName ($memberId)")
             } catch (e: Exception) {
@@ -875,7 +937,7 @@ class MessRepository(
         }
 
         return try {
-            docRef.set(payload, SetOptions.merge()).await()
+            docRef.set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(
                 messId,
                 "EDIT_MEAL",
@@ -923,7 +985,7 @@ class MessRepository(
         }
 
         return try {
-            docRef.set(payload, SetOptions.merge()).await()
+            docRef.set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(messId, if (expense.id.isBlank()) "ADD_EXPENSE" else "EDIT_EXPENSE", "${expense.title}: ৳${expense.amount}")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -934,7 +996,7 @@ class MessRepository(
 
     suspend fun deleteExpense(messId: String, expenseId: String, title: String): Result<Unit> {
         return try {
-            db.collection("messes").document(messId).collection("expenses").document(expenseId).delete().await()
+            db.collection("messes").document(messId).collection("expenses").document(expenseId).delete().awaitOfflineSafe()
             logAudit(messId, "DELETE_EXPENSE", "Deleted expense: $title ($expenseId)")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -977,7 +1039,7 @@ class MessRepository(
         }
 
         return try {
-            docRef.set(payload, SetOptions.merge()).await()
+            docRef.set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(messId, if (utility.id.isBlank()) "ADD_UTILITY" else "EDIT_UTILITY", "${utility.title}: ৳${utility.amount}")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -988,7 +1050,7 @@ class MessRepository(
 
     suspend fun deleteUtility(messId: String, utilityId: String, title: String): Result<Unit> {
         return try {
-            db.collection("messes").document(messId).collection("utilities").document(utilityId).delete().await()
+            db.collection("messes").document(messId).collection("utilities").document(utilityId).delete().awaitOfflineSafe()
             logAudit(messId, "DELETE_UTILITY", "Deleted utility: $title ($utilityId)")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1050,7 +1112,7 @@ class MessRepository(
         }
 
         return try {
-            docRef.set(payload, SetOptions.merge()).await()
+            docRef.set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(
                 messId,
                 if (record.id.isBlank()) "ADD_EGG_RECORD" else "EDIT_EGG_RECORD",
@@ -1065,7 +1127,7 @@ class MessRepository(
 
     suspend fun deleteEggRecord(messId: String, recordId: String, info: String): Result<Unit> {
         return try {
-            db.collection("messes").document(messId).collection("egg_records").document(recordId).delete().await()
+            db.collection("messes").document(messId).collection("egg_records").document(recordId).delete().awaitOfflineSafe()
             logAudit(messId, "DELETE_EGG_RECORD", "Deleted egg log: $info ($recordId)")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1083,7 +1145,7 @@ class MessRepository(
                 "calculationMode" to mode,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
-            db.collection("messes").document(messId).set(payload, SetOptions.merge()).await()
+            db.collection("messes").document(messId).set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(messId, "UPDATE_CALC_MODE", "Switched calculation mode to: $mode")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1103,7 +1165,7 @@ class MessRepository(
                 "partialMealRate" to partialRate,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
-            db.collection("messes").document(messId).set(payload, SetOptions.merge()).await()
+            db.collection("messes").document(messId).set(payload, SetOptions.merge()).awaitOfflineSafe()
             logAudit(messId, "UPDATE_CALC_RATES", "Updated rates: Full=$fullRate, Partial=$partialRate")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -1535,7 +1597,7 @@ class MessRepository(
                 "performedBy" to userEmail,
                 "timestamp" to FieldValue.serverTimestamp()
             )
-            db.collection("messes").document(messId).collection("audit_logs").document(logId).set(payload).await()
+            db.collection("messes").document(messId).collection("audit_logs").document(logId).set(payload).awaitOfflineSafe(500L)
         } catch (e: Exception) {
             Log.w(TAG, "logAudit failed: ${e.message}")
         }

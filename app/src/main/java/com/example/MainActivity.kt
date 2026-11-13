@@ -95,8 +95,24 @@ fun AppRoot() {
     val coroutineScope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
 
-    val repository = remember { MessRepository.create(context) }
-    val viewModel = remember { MessViewModel(repository) }
+    val appContext = context.applicationContext
+    val viewModelStoreOwner = androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner.current
+    val viewModel = remember(viewModelStoreOwner) {
+        val repo = MessRepository.create(appContext)
+        if (viewModelStoreOwner != null) {
+            androidx.lifecycle.ViewModelProvider(
+                viewModelStoreOwner,
+                object : androidx.lifecycle.ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                        return MessViewModel(repo) as T
+                    }
+                }
+            )[MessViewModel::class.java]
+        } else {
+            MessViewModel(repo)
+        }
+    }
 
     var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
     val isGuest by viewModel.isGuestUser.collectAsState()
@@ -193,6 +209,7 @@ fun MainAppContent(
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showRecoveryDialog by remember { mutableStateOf(false) }
+    var showSignOutConfirmDialog by remember { mutableStateOf(false) }
 
     val mess by viewModel.messState.collectAsState()
     val members by viewModel.membersState.collectAsState()
@@ -316,6 +333,61 @@ fun MainAppContent(
         )
     }
 
+    if (showSignOutConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSignOutConfirmDialog = false },
+            title = {
+                Text(
+                    text = if (language == Language.BENGALI) "লগআউট নিশ্চিত করুন" else "Confirm Logout",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (isAdmin) {
+                        if (language == Language.BENGALI)
+                            "আপনি বর্তমানে অ্যাডমিন হিসেবে লগইন আছেন। আপনি কি নিশ্চিতভাবে লগআউট করতে চান? কনফার্ম না করা পর্যন্ত আপনি লগইন অবস্থায় থাকবেন।"
+                        else
+                            "You are currently signed in as Admin. Are you sure you want to log out? You will remain logged in until you confirm."
+                    } else {
+                        if (language == Language.BENGALI)
+                            "আপনি কি নিশ্চিতভাবে আপনার অ্যাকাউন্ট থেকে লগআউট করতে চান? কনফার্ম না করা পর্যন্ত আপনি লগইন অবস্থায় থাকবেন।"
+                        else
+                            "Are you sure you want to log out? You will stay signed in until you confirm."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showSignOutConfirmDialog = false
+                        onSignedOut()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(if (language == Language.BENGALI) "লগআউট নিশ্চিত" else "Confirm Logout")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isAdmin) {
+                        TextButton(
+                            onClick = {
+                                showSignOutConfirmDialog = false
+                                viewModel.setAdminAuthenticated(false)
+                            }
+                        ) {
+                            Text(if (language == Language.BENGALI) "শুধু অ্যাডমিন লক" else "Lock Admin")
+                        }
+                    }
+                    TextButton(onClick = { showSignOutConfirmDialog = false }) {
+                        Text(if (language == Language.BENGALI) "বাতিল" else "Cancel")
+                    }
+                }
+            }
+        )
+    }
+
     LaunchedEffect(userMessage) {
         userMessage?.let { msg ->
             snackbarHostState.showSnackbar(msg)
@@ -335,7 +407,7 @@ fun MainAppContent(
                 userEmail = currentAuthUser?.email,
                 userPhotoUrl = currentAuthUser?.photoUrl?.toString(),
                 onToggleLanguage = { viewModel.toggleLanguage() },
-                onSignOut = onSignedOut,
+                onSignOut = { showSignOutConfirmDialog = true },
                 // Rule 7: Admin access is completely HIDDEN from general users.
                 // Only shown if current user's Gmail matches registered managerEmail OR if mess has no admin yet.
                 onSwitchToAdmin = if (!isAdmin && (isRegisteredManager || canClaimFirstAdmin)) {

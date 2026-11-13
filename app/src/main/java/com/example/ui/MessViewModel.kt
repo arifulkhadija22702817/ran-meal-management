@@ -249,6 +249,8 @@ class MessViewModel(
         )
     )
 
+    private val autoPrefilledDates = mutableSetOf<String>()
+
     init {
         authUidFlow.onEach { uid ->
             if (uid == null) {
@@ -256,15 +258,57 @@ class MessViewModel(
                 _verifiedAdminEmail.value = null
                 _localMessOverride.value = null
             } else {
+                val currentEmail = repository.getCurrentUserEmail()
+                val savedSession = repository.getSavedAdminSession(uid, currentEmail)
+                if (savedSession != null) {
+                    _verifiedAdminEmail.value = savedSession.first
+                    _isAdminAuthenticated.value = true
+                }
                 try {
                     val res = repository.initOrGetMess()
                     res.getOrNull()?.let { fetched ->
                         if (fetched.managerEmail.isNotBlank() && !fetched.managerEmail.contains("placeholder")) {
                             _localMessOverride.value = fetched
+                            if (savedSession != null) {
+                                val emailMismatch = !fetched.managerEmail.equals(savedSession.first, ignoreCase = true)
+                                val hashMismatch = savedSession.second.isNotBlank() &&
+                                    fetched.adminPassword.isNotBlank() &&
+                                    fetched.adminPassword != savedSession.second
+                                if (emailMismatch || hashMismatch) {
+                                    _isAdminAuthenticated.value = false
+                                    _verifiedAdminEmail.value = null
+                                    repository.clearAdminSession()
+                                }
+                            }
                         }
                     }
                 } catch (e: Exception) {
                     android.util.Log.w("MessViewModel", "initOrGetMess error: ${e.message}")
+                }
+            }
+        }.launchIn(viewModelScope)
+
+        // Revoke local admin session immediately if remote mess changes manager or password hash
+        messState.onEach { remoteMess ->
+            if (remoteMess != null && _isAdminAuthenticated.value) {
+                val uid = repository.getCurrentUserUid()
+                val email = repository.getCurrentUserEmail()
+                val saved = repository.getSavedAdminSession(uid, email)
+                if (remoteMess.managerEmail.isNotBlank() && !remoteMess.managerEmail.contains("placeholder")) {
+                    val userEmail = (email ?: "").trim().lowercase()
+                    if (userEmail.isNotBlank() && !remoteMess.managerEmail.equals(userEmail, ignoreCase = true)) {
+                        _isAdminAuthenticated.value = false
+                        _verifiedAdminEmail.value = null
+                        repository.clearAdminSession()
+                    } else if (saved != null && saved.second.isNotBlank() &&
+                        remoteMess.adminPassword.isNotBlank() &&
+                        remoteMess.adminPassword != saved.second &&
+                        remoteMess.adminPassword != "configured"
+                    ) {
+                        _isAdminAuthenticated.value = false
+                        _verifiedAdminEmail.value = null
+                        repository.clearAdminSession()
+                    }
                 }
             }
         }.launchIn(viewModelScope)
@@ -306,16 +350,25 @@ class MessViewModel(
         _verifiedAdminEmail.value = null
         _localMessOverride.value = null
         _isGuestUser.value = false
+        repository.clearAdminSession()
     }
 
     fun setAdminAuthenticated(auth: Boolean) {
         _isAdminAuthenticated.value = auth
         if (!auth) {
             _verifiedAdminEmail.value = null
+            repository.clearAdminSession()
         } else {
             val email = repository.auth.currentUser?.email?.trim()?.lowercase()
-            if (!email.isNullOrBlank() && _verifiedAdminEmail.value.isNullOrBlank()) {
-                _verifiedAdminEmail.value = email
+            val uid = repository.auth.currentUser?.uid
+            if (!email.isNullOrBlank()) {
+                if (_verifiedAdminEmail.value.isNullOrBlank()) {
+                    _verifiedAdminEmail.value = email
+                }
+                val hash = messState.value?.adminPassword ?: ""
+                if (!uid.isNullOrBlank() && hash.isNotBlank() && hash != "configured") {
+                    repository.saveAdminSession(uid, email, hash)
+                }
             }
         }
     }
@@ -347,6 +400,17 @@ class MessViewModel(
 
         effectiveManagerEmail.isNotBlank() && userEmail == effectiveManagerEmail
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    init {
+        // Auto carry-forward previous day's ON meals to today/next day for admin editing
+        combine(isUserAdminFlow, dailyMealsState, _selectedDate) { isAdmin, meals, date ->
+            Triple(isAdmin, meals, date)
+        }.onEach { (isAdmin, meals, date) ->
+            if (isAdmin && meals.isNotEmpty()) {
+                checkAndAutoPrefillDate(date, meals)
+            }
+        }.launchIn(viewModelScope)
+    }
 
     fun isUserAdmin(mess: Mess? = messState.value): Boolean {
         if (!_isAdminAuthenticated.value) return false
@@ -665,17 +729,28 @@ class MessViewModel(
                 _currentMonth.value = month
             }
         }
-        checkAndAutoPrefillDate(date)
+        checkAndAutoPrefillDate(date, dailyMealsState.value)
     }
 
-    private fun checkAndAutoPrefillDate(targetDate: String) {
+    private fun checkAndAutoPrefillDate(targetDate: String, meals: List<DailyMeal> = dailyMealsState.value) {
         if (!isUserAdmin(messState.value)) return
-        val currentMeal = dailyMealsState.value.firstOrNull { it.date == targetDate }
+        if (autoPrefilledDates.contains(targetDate)) return
+
+        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        if (targetDate < todayStr) return
+
+        val currentMeal = meals.firstOrNull { it.date == targetDate }
         if (currentMeal != null && currentMeal.memberMeals.isNotEmpty()) return
+        if (AntiCorruptionPolicy.isMealLocked(currentMeal, targetDate)) return
 
         val prevDate = com.example.ui.screens.shiftDate(targetDate, -1)
-        val prevMeal = dailyMealsState.value.firstOrNull { it.date == prevDate }
-        if (prevMeal != null && prevMeal.memberMeals.isNotEmpty()) {
+        val prevMeal = meals.firstOrNull { it.date == prevDate }
+        val hasAnyMealOn = prevMeal?.memberMeals?.values?.any { m ->
+            (m["b"] ?: 0.0) > 0.0 || (m["l"] ?: 0.0) > 0.0 || (m["d"] ?: 0.0) > 0.0
+        } == true
+
+        if (hasAnyMealOn) {
+            autoPrefilledDates.add(targetDate)
             copyMealsFromPreviousDate(targetDate, silent = true)
         }
     }
