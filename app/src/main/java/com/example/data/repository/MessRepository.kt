@@ -22,6 +22,7 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -44,7 +45,7 @@ class MessRepository(
         fun verifyPasswordHash(input: String, stored: String): Boolean {
             if (stored.isBlank() || input.isBlank()) return false
             val hashedInput = hashAdminPassword(input)
-            return hashedInput.equals(stored, ignoreCase = true) || input == stored
+            return hashedInput.equals(stored, ignoreCase = true)
         }
 
         fun create(context: Context): MessRepository {
@@ -83,6 +84,15 @@ class MessRepository(
             ?: "manager_placeholder"
     }
 
+    fun observeAuthUid(): Flow<String?> = callbackFlow {
+        val listener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { firebaseAuth ->
+            trySend(firebaseAuth.currentUser?.uid)
+        }
+        auth.addAuthStateListener(listener)
+        trySend(auth.currentUser?.uid)
+        awaitClose { auth.removeAuthStateListener(listener) }
+    }.distinctUntilChanged()
+
     /**
      * Observes the mess document in real-time without crashing on connection errors.
      */
@@ -118,19 +128,7 @@ class MessRepository(
             val snapshot = docRef.get().await()
             if (snapshot.exists()) {
                 val existingMess = snapshot.toObject(Mess::class.java)!!
-                // If managerEmail or adminPassword not set yet or is placeholder, seed target default admin
-                if (existingMess.managerEmail.isBlank() || existingMess.adminPassword.isBlank() || existingMess.managerEmail.contains("placeholder")) {
-                    val defaultAdminEmail = "arifulislamsaju.sdp@gmail.com"
-                    val defaultHash = hashAdminPassword("Admin123@")
-                    docRef.update(
-                        mapOf(
-                            "managerEmail" to defaultAdminEmail,
-                            "adminPassword" to defaultHash,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    ).await()
-                }
-                // Ensure current user is in authorized_members
+                // Ensure current user is in authorized_members as MEMBER
                 try {
                     ensureUserAuthorized(messId, uid, email)
                 } catch (e: Exception) {
@@ -139,38 +137,21 @@ class MessRepository(
                 Result.success(existingMess)
             } else {
                 val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
-                val defaultAdminEmail = "arifulislamsaju.sdp@gmail.com"
-                val defaultHash = hashAdminPassword("Admin123@")
-                val newMess = hashMapOf(
-                    "name" to messName,
-                    "currency" to "BDT",
-                    "managerUid" to uid,
-                    "managerEmail" to defaultAdminEmail,
-                    "adminPassword" to defaultHash,
-                    "currentMonth" to currentMonth,
-                    "managerAssignedAt" to FieldValue.serverTimestamp(),
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                docRef.set(newMess).await()
+                // Mess document does not exist yet: keep unassigned until first admin claims with password
+                // (Firestore create rule requires incoming.managerUid == request.auth.uid)
                 try {
                     ensureUserAuthorized(messId, uid, email)
-                    logAudit(messId, "INITIALIZE_MESS", "Initialized mess with default manager $defaultAdminEmail")
                 } catch (e: Exception) {
-                    Log.w(TAG, "Initialization audit notice: ${e.message}")
+                    Log.w(TAG, "ensureUserAuthorized notice: ${e.message}")
                 }
-
-                // Pre-populate with default sample border members if brand new
-                seedDefaultMembersIfEmpty(messId)
-
                 Result.success(
                     Mess(
                         id = messId,
                         name = messName,
                         currency = "BDT",
-                        managerUid = uid,
-                        managerEmail = defaultAdminEmail,
-                        adminPassword = defaultHash,
+                        managerUid = "",
+                        managerEmail = "",
+                        adminPassword = "",
                         currentMonth = currentMonth
                     )
                 )
@@ -183,10 +164,10 @@ class MessRepository(
 
     /**
      * Verifies Admin Gmail and Password directly from Firestore.
-     * If both match:
-     * - Binds the caller's current UID to the mess managerUid
-     * - Grants full admin access
-     * If mismatch: returns failure with descriptive message.
+     * Rules:
+     * - Only ONE active admin Gmail is allowed. 2nd Gmail can never be admin.
+     * - Both Gmail and Password must match strictly.
+     * - Grants full admin access upon match and binds current UID to managerUid.
      */
     suspend fun verifyAdminCredentials(
         messId: String = DEFAULT_MESS_ID,
@@ -209,42 +190,29 @@ class MessRepository(
                 return Result.failure(IllegalStateException("মেস ডাটাবেজ পাওয়া যায়নি"))
             }
 
-            var storedEmail = (snap.getString("managerEmail") ?: "").trim().lowercase()
-            var storedPass = snap.getString("adminPassword") ?: ""
+            val storedEmail = (snap.getString("managerEmail") ?: "").trim().lowercase()
+            val storedPass = snap.getString("adminPassword") ?: ""
 
-            val targetDefaultEmail = "arifulislamsaju.sdp@gmail.com"
-            val targetDefaultPass = "Admin123@"
-            val targetDefaultHash = hashAdminPassword(targetDefaultPass)
-
-            // Fallback default admin ONLY if document does not have admin configured yet
-            if (storedEmail.isBlank() || storedEmail.contains("placeholder") || storedPass.isBlank()) {
-                storedEmail = targetDefaultEmail
-                storedPass = targetDefaultHash
-                try {
-                    docRef.update(
-                        mapOf(
-                            "managerEmail" to targetDefaultEmail,
-                            "adminPassword" to targetDefaultHash,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    ).await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Notice syncing default admin to Firestore: ${e.message}")
-                }
+            if (storedEmail.isBlank() || storedPass.isBlank() || storedEmail.contains("placeholder")) {
+                return Result.failure(IllegalStateException("মেসে এখনও কোনো অ্যাডমিন জিমেইল ও পাসওয়ার্ড সেট করা হয়নি। অনুগ্রহ করে প্রথমে অ্যাডমিন জিমেইল ও পাসওয়ার্ড তৈরি করুন।"))
             }
 
+            // Strictly 1 single admin Gmail allowed:
+            val signedInEmail = (user?.email ?: "").trim().lowercase()
+            if (signedInEmail.isNotBlank() && !signedInEmail.equals(storedEmail, ignoreCase = true)) {
+                return Result.failure(SecurityException("আপনার সাইন-ইন করা জিমেইল ($signedInEmail) অনুমোদিত অ্যাডমিন জিমেইল ($storedEmail)-এর সাথে মিলছে না! ২য় কোনো জিমেইল অ্যাডমিন হতে পারবে না।"))
+            }
             val emailMatch = cleanEmail.equals(storedEmail, ignoreCase = true)
-            val passMatch = verifyPasswordHash(cleanPass, storedPass)
-
             if (!emailMatch) {
-                return Result.failure(SecurityException("ভুল অ্যাডমিন জিমেইল! অনুমোদিত অ্যাডমিন জিমেইল ($storedEmail) লিখুন।"))
+                return Result.failure(SecurityException("ভুল অ্যাডমিন জিমেইল! এই মেসে শুধুমাত্র ১টি অনুমোদিত অ্যাডমিন জিমেইল রয়েছে। ২য় কোনো জিমেইল অ্যাডমিন হতে পারবে না।"))
             }
 
+            val passMatch = verifyPasswordHash(cleanPass, storedPass)
             if (!passMatch) {
                 return Result.failure(SecurityException("ভুল অ্যাডমিন পাসওয়ার্ড! সঠিক পাসওয়ার্ড লিখুন।"))
             }
 
-            // Both match! Update caller's UID and authorized role
+            // Both match! Update caller's UID and role
             if (uid.isNotEmpty()) {
                 try {
                     docRef.update(
@@ -253,13 +221,17 @@ class MessRepository(
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).await()
-                    ensureUserAuthorized(messId, uid, cleanEmail, user?.displayName ?: cleanEmail)
+                    ensureUserAuthorized(messId, uid, cleanEmail, user?.displayName ?: cleanEmail, "MANAGER")
                 } catch (e: Exception) {
                     Log.w(TAG, "Notice binding manager UID: ${e.message}")
                 }
             }
 
-            logAudit(messId, "ADMIN_CREDENTIALS_LOGIN", "Admin credentials successfully verified for $cleanEmail")
+            try {
+                logAudit(messId, "ADMIN_CREDENTIALS_LOGIN", "Admin credentials successfully verified for $cleanEmail")
+            } catch (e: Exception) {
+                Log.w(TAG, "Notice audit: ${e.message}")
+            }
             Result.success(true)
         } catch (e: Exception) {
             Log.e(TAG, "verifyAdminCredentials failed", e)
@@ -271,7 +243,8 @@ class MessRepository(
         messId: String = DEFAULT_MESS_ID,
         uid: String,
         email: String,
-        displayName: String = ""
+        displayName: String = "",
+        role: String = "MEMBER"
     ): Result<Unit> {
         return try {
             val docRef = db.collection("messes").document(messId)
@@ -280,6 +253,7 @@ class MessRepository(
                 "uid" to uid,
                 "email" to email.trim().lowercase(),
                 "displayName" to displayName.take(80),
+                "role" to role,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             docRef.set(payload, SetOptions.merge()).await()
@@ -406,7 +380,7 @@ class MessRepository(
                 val activeManagerUid = messSnapshot.getString("managerUid") ?: ""
                 val activeManagerEmail = (messSnapshot.getString("managerEmail") ?: "").trim().lowercase()
 
-                // 1. Update active manager in parent mess document and set new adminPassword if provided
+                // 1. Update active manager in parent mess document and reset/set adminPassword
                 val messUpdates = mutableMapOf<String, Any>(
                     "managerUid" to cleanUid,
                     "managerEmail" to cleanEmail,
@@ -415,6 +389,8 @@ class MessRepository(
                 )
                 if (!newAdminPassword.isNullOrBlank()) {
                     messUpdates["adminPassword"] = hashAdminPassword(newAdminPassword)
+                } else {
+                    messUpdates["adminPassword"] = ""
                 }
                 transaction.update(messRef, messUpdates)
 
@@ -567,7 +543,19 @@ class MessRepository(
                 SetOptions.merge()
             ).await()
 
-            logAudit(messId, "CLAIM_INITIAL_ADMIN", "Initial admin registered for $email with secure password")
+            if (!snapshot.exists()) {
+                try {
+                    seedDefaultMembersIfEmpty(messId)
+                } catch (e: Exception) {
+                    Log.w(TAG, "seedDefaultMembersIfEmpty notice: ${e.message}")
+                }
+            }
+
+            try {
+                logAudit(messId, "CLAIM_INITIAL_ADMIN", "Initial admin registered for $email with secure password")
+            } catch (e: Exception) {
+                Log.w(TAG, "Audit log notice on claimInitialAdmin: ${e.message}")
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Error claiming initial admin", e)
@@ -622,6 +610,11 @@ class MessRepository(
                 return Result.success(true)
             }
 
+            val storedEmail = (snap.getString("managerEmail") ?: "").trim().lowercase()
+            if (storedEmail.isNotBlank() && !storedEmail.contains("placeholder") && !storedEmail.equals(email, ignoreCase = true)) {
+                return Result.failure(SecurityException("শুধুমাত্র নিবন্ধিত অ্যাডমিন জিমেইল ($storedEmail) অ্যাক্সেস নিতে পারবেন।"))
+            }
+
             if (clean.isBlank()) {
                 return Result.success(false)
             }
@@ -635,7 +628,7 @@ class MessRepository(
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).await()
-                    ensureUserAuthorized(messId, uid, email, user?.displayName ?: email)
+                    ensureUserAuthorized(messId, uid, email, user?.displayName ?: email, "MANAGER")
                 } catch (e: Exception) {
                     Log.w(TAG, "Notice syncing managerUid: ${e.message}")
                 }
@@ -1300,55 +1293,53 @@ class MessRepository(
 
             val messRef = db.collection("messes").document(messId)
 
-            // Step 2: Delete all daily meals
-            for (doc in safeGetDocuments(messRef.collection("daily_meals"))) {
-                try {
-                    doc.reference.delete().await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Delete meal doc failed: ${e.message}")
-                }
+            // Step 2: Delete all daily meals in batches
+            val mealDocs = safeGetDocuments(messRef.collection("daily_meals"))
+            for (chunk in mealDocs.chunked(400)) {
+                val batch = db.batch()
+                chunk.forEach { batch.delete(it.reference) }
+                batch.commit().await()
             }
 
-            // Step 3: Delete all bazaar expenses
-            for (doc in safeGetDocuments(messRef.collection("expenses"))) {
-                try {
-                    doc.reference.delete().await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Delete expense doc failed: ${e.message}")
-                }
+            // Step 3: Delete all bazaar expenses in batches
+            val expenseDocs = safeGetDocuments(messRef.collection("expenses"))
+            for (chunk in expenseDocs.chunked(400)) {
+                val batch = db.batch()
+                chunk.forEach { batch.delete(it.reference) }
+                batch.commit().await()
             }
 
-            // Step 4: Delete all utilities
-            for (doc in safeGetDocuments(messRef.collection("utilities"))) {
-                try {
-                    doc.reference.delete().await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Delete utility doc failed: ${e.message}")
-                }
+            // Step 4: Delete all utilities in batches
+            val utilityDocs = safeGetDocuments(messRef.collection("utilities"))
+            for (chunk in utilityDocs.chunked(400)) {
+                val batch = db.batch()
+                chunk.forEach { batch.delete(it.reference) }
+                batch.commit().await()
             }
 
-            // Step 5: Delete all egg records
-            for (doc in safeGetDocuments(messRef.collection("egg_records"))) {
-                try {
-                    doc.reference.delete().await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Delete egg doc failed: ${e.message}")
-                }
+            // Step 5: Delete all egg records in batches
+            val eggDocs = safeGetDocuments(messRef.collection("egg_records"))
+            for (chunk in eggDocs.chunked(400)) {
+                val batch = db.batch()
+                chunk.forEach { batch.delete(it.reference) }
+                batch.commit().await()
             }
 
-            // Step 6: Reset member balances (preserve members, zero out deposits)
-            for (doc in safeGetDocuments(messRef.collection("members"))) {
-                try {
-                    doc.reference.update(
+            // Step 6: Reset all member balances (zero out deposits)
+            val memberDocs = safeGetDocuments(messRef.collection("members"))
+            for (chunk in memberDocs.chunked(400)) {
+                val batch = db.batch()
+                chunk.forEach { doc ->
+                    batch.update(
+                        doc.reference,
                         mapOf(
                             "potDeposits" to 0.0,
                             "cashDeposits" to 0.0,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
-                    ).await()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Reset member deposit failed: ${e.message}")
+                    )
                 }
+                batch.commit().await()
             }
 
             try {

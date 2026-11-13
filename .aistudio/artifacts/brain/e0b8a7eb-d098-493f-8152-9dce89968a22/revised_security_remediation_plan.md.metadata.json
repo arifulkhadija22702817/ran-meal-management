@@ -1,5 +1,0 @@
-{
-  "summary": "Revised Final Security Remediation Plan addressing all 7 gaps: Invitation/UID exchange, field allowlists, three-way atomic validation, authorized_members lifecycle, initial bootstrap security, Android Keystore & 1 MiB limit handling, and APK compatibility policy.",
-  "updatedAt": "2026-11-03T09:49:10.618975025Z",
-  "userFacing": true
-}

@@ -105,9 +105,9 @@ fun AuthScreen(
     var signedInUserEmailForInitialClaim by remember { mutableStateOf("") }
 
     val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
-    val hasAdminConfigured = !mess?.managerEmail.isNullOrBlank() &&
+    val hasAdminConfigured = managerEmail.isNotBlank() &&
             !mess?.adminPassword.isNullOrBlank() &&
-            !mess?.managerEmail?.contains("placeholder")!!
+            !managerEmail.contains("placeholder")
 
     // Initial Admin Claim Dialog (When no admin exists yet in Firebase)
     if (showInitialAdminDialog && signedInUserEmailForInitialClaim.isNotBlank()) {

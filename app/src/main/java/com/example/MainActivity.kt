@@ -145,8 +145,10 @@ fun AppRoot() {
             },
             onMemberAuthSuccess = {
                 showAdmin3TierDialog = false
-                viewModel.setAdminAuthenticated(false)
                 currentUser = Firebase.auth.currentUser
+                // All logins enter with standard user access initially.
+                // If this is the registered admin Gmail, they unlock admin via password.
+                viewModel.setAdminAuthenticated(false)
                 viewModel.syncUserProfile()
             },
             onAdminAuthRequested = {
@@ -216,13 +218,17 @@ fun MainAppContent(
     val currentEmail = currentAuthUser?.email?.trim()?.lowercase() ?: ""
     val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
 
-    val hasAdminConfigured = !mess?.managerEmail.isNullOrBlank() &&
-            !mess?.adminPassword.isNullOrBlank() &&
-            !mess?.managerEmail?.contains("placeholder")!!
+    val hasManagerEmail = managerEmail.isNotBlank() && !managerEmail.contains("placeholder")
+    val hasAdminConfigured = hasManagerEmail && !mess?.adminPassword.isNullOrBlank()
 
-    val isRegisteredManager = currentEmail.isNotBlank() &&
-            managerEmail.isNotBlank() &&
-            currentEmail.equals(managerEmail, ignoreCase = true)
+    // Exactly 1 registered admin Gmail:
+    val isRegisteredManager = currentEmail.isNotBlank() && (
+            (hasManagerEmail && currentEmail.equals(managerEmail, ignoreCase = true)) ||
+            (mess?.managerUid?.isNotBlank() == true && mess?.managerUid == currentAuthUser?.uid)
+    )
+
+    // If no admin Gmail is configured in the mess yet, the first user to set admin password becomes admin
+    val canClaimFirstAdmin = !hasManagerEmail && currentEmail.isNotBlank()
 
     LaunchedEffect(showAdmin3TierDialogInitial) {
         if (showAdmin3TierDialogInitial && isRegisteredManager) {
@@ -236,27 +242,52 @@ fun MainAppContent(
     }
 
     if (showPasswordDialog) {
-        AdminDirectLoginDialog(
-            initialEmail = currentAuthUser?.email ?: "",
-            currentConfiguredEmail = managerEmail,
-            language = language,
-            onDismiss = {
+        if (!hasAdminConfigured) {
+            if (!hasManagerEmail || isRegisteredManager) {
+                // Rule 1: No admin exists yet (or handover target needs to create password) -> Create initial password
+                InitialAdminClaimDialog(
+                    userEmail = currentEmail,
+                    language = language,
+                    onDismiss = {
+                        showPasswordDialog = false
+                        onDismissAdminDialog()
+                    },
+                    onClaimAdmin = { initialPassword, onSuccess, onFailure ->
+                        viewModel.claimInitialAdmin(initialPassword, onSuccess, onFailure)
+                    },
+                    onSuccess = {
+                        showPasswordDialog = false
+                        onDismissAdminDialog()
+                        viewModel.setAdminAuthenticated(true)
+                    }
+                )
+            } else {
                 showPasswordDialog = false
                 onDismissAdminDialog()
-            },
-            onVerifyAdminCredentials = { email, password, onSuccess, onFailure ->
-                viewModel.verifyAdminCredentials(email, password, onSuccess, onFailure)
-            },
-            onSuccess = {
-                showPasswordDialog = false
-                onDismissAdminDialog()
-                viewModel.setAdminAuthenticated(true)
-            },
-            onForgotPassword = {
-                showPasswordDialog = false
-                showRecoveryDialog = true
             }
-        )
+        } else {
+            AdminDirectLoginDialog(
+                initialEmail = currentAuthUser?.email ?: "",
+                currentConfiguredEmail = managerEmail,
+                language = language,
+                onDismiss = {
+                    showPasswordDialog = false
+                    onDismissAdminDialog()
+                },
+                onVerifyAdminCredentials = { email, password, onSuccess, onFailure ->
+                    viewModel.verifyAdminCredentials(email, password, onSuccess, onFailure)
+                },
+                onSuccess = {
+                    showPasswordDialog = false
+                    onDismissAdminDialog()
+                    viewModel.setAdminAuthenticated(true)
+                },
+                onForgotPassword = {
+                    showPasswordDialog = false
+                    showRecoveryDialog = true
+                }
+            )
+        }
     }
 
     if (showRecoveryDialog) {
@@ -305,7 +336,9 @@ fun MainAppContent(
                 userPhotoUrl = currentAuthUser?.photoUrl?.toString(),
                 onToggleLanguage = { viewModel.toggleLanguage() },
                 onSignOut = onSignedOut,
-                onSwitchToAdmin = if (!isAdmin) {
+                // Rule 7: Admin access is completely HIDDEN from general users.
+                // Only shown if current user's Gmail matches registered managerEmail OR if mess has no admin yet.
+                onSwitchToAdmin = if (!isAdmin && (isRegisteredManager || canClaimFirstAdmin)) {
                     { requestAdminUnlock() }
                 } else null
             )

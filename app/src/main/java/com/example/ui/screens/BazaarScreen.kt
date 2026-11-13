@@ -280,9 +280,9 @@ fun BazaarScreen(
                                     onClick = {
                                         if (isLocked) {
                                             lockedDialogMessage = if (language == Language.BENGALI)
-                                                "এই বাজার খরচটি (${expense.title} - ৳${expense.amount.toInt()}) ২৪ ঘণ্টার বেশি আগে দাখিল করা হয়েছিল। দুর্নীতি ও হিসাব পরিবর্তন রোধে ২৪ ঘণ্টা পর এই রেকর্ড স্থায়ীভাবে লক হয়ে গেছে। এটি আর মোছা যাবে না।"
+                                                "এই বাজার খরচটি (${expense.title} - ৳${expense.amount.toInt()}) আপডেট করার পর ২৪ ঘণ্টা পার হয়ে গেছে। দুর্নীতি রোধের স্বার্থে ২৪ ঘণ্টা পর রেকর্ডটি স্বয়ংক্রিয়ভাবে ব্লক করা হয়েছে। এটি আর মোছা যাবে না।"
                                             else
-                                                "This bazaar expense (${expense.title}) was recorded over 24 hours ago. For anti-corruption protection, it is permanently locked and cannot be deleted."
+                                                "This bazaar expense (${expense.title}) was updated over 24 hours ago. For anti-corruption protection, it is auto-blocked and cannot be deleted."
                                             showLockedDialog = true
                                         } else {
                                             expenseToDelete = expense

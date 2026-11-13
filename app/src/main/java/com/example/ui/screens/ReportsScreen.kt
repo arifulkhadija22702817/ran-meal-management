@@ -141,41 +141,43 @@ fun ReportsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // ACTION: Generate & Share PDF Report
-                    OutlinedButton(
-                        onClick = {
-                            isGeneratingPdf = true
-                            try {
-                                val pdfFile = PdfReportGenerator.generateMonthlyReport(
-                                    context = context,
-                                    messName = messName,
-                                    month = currentMonth,
-                                    summary = summary,
-                                    utilities = utilities
-                                )
-                                WhatsAppShareHelper.sharePdfFile(context, pdfFile, "$messName Statement $currentMonth")
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "PDF generation failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                            } finally {
-                                isGeneratingPdf = false
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(46.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        enabled = !isGeneratingPdf
-                    ) {
-                        if (isGeneratingPdf) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (language == Language.ENGLISH) "Export & Download PDF Audit" else "অডিট স্টেটমেন্টের PDF তৈরি করুন",
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                    // ACTION: Generate & Share PDF Report (Admin Only)
+                    if (isAdmin) {
+                        OutlinedButton(
+                            onClick = {
+                                isGeneratingPdf = true
+                                try {
+                                    val pdfFile = PdfReportGenerator.generateMonthlyReport(
+                                        context = context,
+                                        messName = messName,
+                                        month = currentMonth,
+                                        summary = summary,
+                                        utilities = utilities
+                                    )
+                                    WhatsAppShareHelper.sharePdfFile(context, pdfFile, "$messName Statement $currentMonth")
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "PDF generation failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    isGeneratingPdf = false
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = !isGeneratingPdf
+                        ) {
+                            if (isGeneratingPdf) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (language == Language.ENGLISH) "Export & Download PDF Audit" else "অডিট স্টেটমেন্টের PDF তৈরি করুন",
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }
@@ -349,19 +351,21 @@ fun ReportsScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (member.phone.isNotBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                IconButton(
-                                    onClick = {
-                                        memberToEditPhone = Pair(memSummary, member.phone)
-                                    },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Edit,
-                                        contentDescription = "Edit phone",
-                                        tint = EmeraldPrimary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
+                                if (isAdmin) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = {
+                                            memberToEditPhone = Pair(memSummary, member.phone)
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit phone",
+                                            tint = EmeraldPrimary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
                                 }
                             }
                             if (member.roomNumber.isNotBlank()) {
@@ -481,6 +485,44 @@ fun ReportsScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = EmeraldPrimary
                             )
+                        }
+
+                        // Rule 10: ONLY admin can send WhatsApp reports directly to member's personal inbox
+                        if (isAdmin) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = {
+                                    WhatsAppShareHelper.shareMemberStatementToWhatsApp(
+                                        context = context,
+                                        summary = memSummary,
+                                        month = currentMonth,
+                                        mealRate = summary.mealRate,
+                                        messName = messName,
+                                        calculationMode = summary.calculationMode
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(42.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = WhatsAppBrandGreen,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (language == Language.ENGLISH)
+                                            "Send Personal Statement via WhatsApp"
+                                        else
+                                            "📱 হোয়াটসঅ্যাপে এনার ইনবক্সে হিসাব পাঠান",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }

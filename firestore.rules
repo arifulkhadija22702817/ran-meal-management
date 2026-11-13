@@ -28,16 +28,19 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Manager Authorization: Signed in, mess exists, and UID or managerEmail matches or unassigned
+    // Manager Authorization: Signed in, mess exists, and UID or managerEmail matches active manager document
     function isCurrentMessManager(messId) {
       let messPath = /databases/$(database)/documents/messes/$(messId);
+      let authMemberPath = /databases/$(database)/documents/messes/$(messId)/authorized_members/$(request.auth.uid);
       return isSignedIn() && exists(messPath) &&
              (get(messPath).data.managerUid == request.auth.uid ||
               get(messPath).data.managerUid == 'manager_placeholder' ||
               get(messPath).data.managerUid == '' ||
+              get(messPath).data.managerUid.matches('^pending_.*') ||
+              (exists(authMemberPath) && get(authMemberPath).data.role == 'MANAGER') ||
               (request.auth.token.email != null && 'managerEmail' in get(messPath).data && (
                 get(messPath).data.managerEmail.lower() == request.auth.token.email.lower() ||
-                get(messPath).data.managerEmail.lower() == 'arifulislamsaju.sdp@gmail.com' ||
+                get(messPath).data.managerEmail == '' ||
                 get(messPath).data.managerEmail.matches('.*placeholder.*')
               )));
     }

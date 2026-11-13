@@ -16,12 +16,17 @@ import com.example.data.model.Utility
 import com.example.data.repository.MessRepository
 import com.example.util.AntiCorruptionPolicy
 import com.example.util.MessCalculator
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -76,80 +81,121 @@ class MessViewModel(
     private val _isAdminAuthenticated = MutableStateFlow(false)
     val isAdminAuthenticated: StateFlow<Boolean> = _isAdminAuthenticated.asStateFlow()
 
+    // Verified admin Gmail bound in memory for zero-latency reactivity before Firestore snapshot arrives
+    private val _verifiedAdminEmail = MutableStateFlow<String?>(null)
+    private val _localMessOverride = MutableStateFlow<Mess?>(null)
+
     val currentUserUid: String?
         get() = repository.getCurrentUserUid()
     val currentUserEmail: String?
         get() = repository.getCurrentUserEmail()
 
-    val messState: StateFlow<Mess?> = repository.observeMess()
-        .catch { e ->
-            android.util.Log.e("MessViewModel", "observeMess flow error: ${e.message}", e)
-            emit(null)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val authUidFlow: StateFlow<String?> = repository.observeAuthUid()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, repository.getCurrentUserUid())
 
-    val membersState: StateFlow<List<Member>> = repository.observeMembers()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val messState: StateFlow<Mess?> = combine(
+        authUidFlow.flatMapLatest { uid ->
+            if (uid == null) {
+                flowOf(null)
+            } else {
+                repository.observeMess()
+                    .catch { e ->
+                        android.util.Log.e("MessViewModel", "observeMess flow error: ${e.message}", e)
+                        emit(null)
+                    }
+            }
+        },
+        _localMessOverride
+    ) { remoteMess, localOverride ->
+        when {
+            remoteMess != null && remoteMess.managerEmail.isNotBlank() && !remoteMess.managerEmail.contains("placeholder") -> remoteMess
+            localOverride != null -> localOverride
+            else -> remoteMess
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val membersState: StateFlow<List<Member>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeMembers().catch { e ->
             android.util.Log.e("MessViewModel", "observeMembers flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val dailyMealsState: StateFlow<List<DailyMeal>> = repository.observeDailyMeals()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val dailyMealsState: StateFlow<List<DailyMeal>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeDailyMeals().catch { e ->
             android.util.Log.e("MessViewModel", "observeDailyMeals flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val expensesState: StateFlow<List<Expense>> = repository.observeExpenses()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val expensesState: StateFlow<List<Expense>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeExpenses().catch { e ->
             android.util.Log.e("MessViewModel", "observeExpenses flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val utilitiesState: StateFlow<List<Utility>> = repository.observeUtilities()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val utilitiesState: StateFlow<List<Utility>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeUtilities().catch { e ->
             android.util.Log.e("MessViewModel", "observeUtilities flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val auditLogsState: StateFlow<List<AuditLog>> = repository.observeAuditLogs()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val auditLogsState: StateFlow<List<AuditLog>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeAuditLogs().catch { e ->
             android.util.Log.e("MessViewModel", "observeAuditLogs flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val eggRecordsState: StateFlow<List<EggRecord>> = repository.observeEggRecords()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val eggRecordsState: StateFlow<List<EggRecord>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeEggRecords().catch { e ->
             android.util.Log.e("MessViewModel", "observeEggRecords flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val backupsState: StateFlow<List<MessBackup>> = repository.observeBackups()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val backupsState: StateFlow<List<MessBackup>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeBackups().catch { e ->
             android.util.Log.e("MessViewModel", "observeBackups flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val adminHistoryState: StateFlow<List<AdminHandoverRecord>> = repository.observeAdminHistory()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val adminHistoryState: StateFlow<List<AdminHandoverRecord>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeAdminHistory().catch { e ->
             android.util.Log.e("MessViewModel", "observeAdminHistory flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val authorizedMembersState: StateFlow<List<com.example.data.model.AuthorizedMember>> = repository.observeAuthorizedMembers()
-        .catch { e ->
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val authorizedMembersState: StateFlow<List<com.example.data.model.AuthorizedMember>> = authUidFlow.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else repository.observeAuthorizedMembers().catch { e ->
             android.util.Log.e("MessViewModel", "observeAuthorizedMembers flow error: ${e.message}", e)
             emit(emptyList())
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Live Egg Inventory Auto-Calculation:
     // Remaining stock = Total Purchased - Total Consumed - Total Damaged
@@ -204,21 +250,51 @@ class MessViewModel(
     )
 
     init {
-        // Initialize default mess if not yet initialized
-        viewModelScope.launch {
-            try {
-                if (currentUserUid != null) {
-                    repository.initOrGetMess()
+        authUidFlow.onEach { uid ->
+            if (uid == null) {
+                _isAdminAuthenticated.value = false
+                _verifiedAdminEmail.value = null
+                _localMessOverride.value = null
+            } else {
+                try {
+                    val res = repository.initOrGetMess()
+                    res.getOrNull()?.let { fetched ->
+                        if (fetched.managerEmail.isNotBlank() && !fetched.managerEmail.contains("placeholder")) {
+                            _localMessOverride.value = fetched
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("MessViewModel", "initOrGetMess error: ${e.message}")
                 }
-            } catch (e: Exception) {
-                android.util.Log.w("MessViewModel", "initOrGetMess error: ${e.message}")
             }
+        }.launchIn(viewModelScope)
+    }
+
+    private fun grantAdminSessionForCurrentUser(configuredPasswordMarker: String = "configured") {
+        val user = repository.auth.currentUser
+        val email = (user?.email ?: "").trim().lowercase()
+        val uid = user?.uid ?: ""
+        if (email.isNotBlank()) {
+            _verifiedAdminEmail.value = email
+            val current = messState.value
+            _localMessOverride.value = (current ?: Mess(
+                id = MessRepository.DEFAULT_MESS_ID,
+                name = "Meal Management Hostel",
+                currency = "BDT",
+                currentMonth = _currentMonth.value
+            )).copy(
+                managerUid = uid.ifBlank { current?.managerUid ?: "" },
+                managerEmail = email,
+                adminPassword = current?.adminPassword?.ifBlank { configuredPasswordMarker } ?: configuredPasswordMarker
+            )
+            _isAdminAuthenticated.value = true
         }
     }
 
     fun enterAsGuest() {
         _isGuestUser.value = true
         _isAdminAuthenticated.value = false
+        _verifiedAdminEmail.value = null
     }
 
     fun exitGuest() {
@@ -227,54 +303,64 @@ class MessViewModel(
 
     fun signOutAdmin() {
         _isAdminAuthenticated.value = false
+        _verifiedAdminEmail.value = null
+        _localMessOverride.value = null
         _isGuestUser.value = false
     }
 
     fun setAdminAuthenticated(auth: Boolean) {
         _isAdminAuthenticated.value = auth
-    }
-
-    val isUserAdminFlow: StateFlow<Boolean> = combine(
-        _isAdminAuthenticated,
-        messState
-    ) { isAuth, mess ->
-        if (!isAuth) return@combine false
-        val uid = repository.getCurrentUserUid() ?: return@combine false
-        val userEmail = repository.auth.currentUser?.email?.trim()?.lowercase() ?: ""
-        val managerUid = mess?.managerUid ?: ""
-        val managerEmail = mess?.managerEmail?.trim()?.lowercase() ?: ""
-
-        val isUidMatch = uid.isNotEmpty() && uid == managerUid
-        val isEmailMatch = userEmail.isNotEmpty() && managerEmail.isNotEmpty() && userEmail == managerEmail
-
-        if (uid.isNotEmpty() && !isUidMatch) {
-            viewModelScope.launch {
-                try {
-                    val updateMap = mutableMapOf<String, Any>(
-                        "managerUid" to uid,
-                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
-                    )
-                    if (managerEmail.isEmpty() || managerEmail.contains("placeholder")) {
-                        updateMap["managerEmail"] = userEmail
-                    }
-                    repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
-                        .update(updateMap)
-                    repository.ensureUserAuthorized(
-                        messId = MessRepository.DEFAULT_MESS_ID,
-                        uid = uid,
-                        email = if (managerEmail.isNotBlank() && !managerEmail.contains("placeholder")) managerEmail else userEmail,
-                        displayName = repository.auth.currentUser?.displayName ?: userEmail
-                    )
-                } catch (e: Exception) {
-                    android.util.Log.w("MessViewModel", "Notice auto-binding admin in Firestore: ${e.message}")
-                }
+        if (!auth) {
+            _verifiedAdminEmail.value = null
+        } else {
+            val email = repository.auth.currentUser?.email?.trim()?.lowercase()
+            if (!email.isNullOrBlank() && _verifiedAdminEmail.value.isNullOrBlank()) {
+                _verifiedAdminEmail.value = email
             }
         }
-        true
+    }
+
+    /**
+     * Single Active Admin Access Control:
+     * Admin access is granted ONLY IF:
+     * 1. The user's signed-in Gmail strictly matches the mess's registered managerEmail (only 1 Gmail can be admin).
+     * 2. The user has actively unlocked/authenticated with their secret Admin Password (_isAdminAuthenticated == true).
+     * 3. Uses local verified fallback immediately on claim/verify so UI updates without waiting for snapshot latency.
+     */
+    val isUserAdminFlow: StateFlow<Boolean> = combine(
+        _isAdminAuthenticated,
+        _verifiedAdminEmail,
+        messState,
+        authUidFlow
+    ) { isAuth, verifiedEmail, mess, uid ->
+        if (!isAuth || uid == null) return@combine false
+        val currentAuthUser = repository.auth.currentUser ?: return@combine false
+        val userEmail = (currentAuthUser.email ?: "").trim().lowercase()
+        if (userEmail.isBlank()) return@combine false
+
+        val docManagerEmail = (mess?.managerEmail ?: "").trim().lowercase()
+        val effectiveManagerEmail = if (docManagerEmail.isNotBlank() && !docManagerEmail.contains("placeholder")) {
+            docManagerEmail
+        } else {
+            (verifiedEmail ?: "").trim().lowercase()
+        }
+
+        effectiveManagerEmail.isNotBlank() && userEmail == effectiveManagerEmail
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     fun isUserAdmin(mess: Mess? = messState.value): Boolean {
-        return _isAdminAuthenticated.value && repository.getCurrentUserUid() != null
+        if (!_isAdminAuthenticated.value) return false
+        val userEmail = repository.auth.currentUser?.email?.trim()?.lowercase() ?: ""
+        if (userEmail.isBlank()) return false
+
+        val docManagerEmail = (mess?.managerEmail ?: "").trim().lowercase()
+        val effectiveManagerEmail = if (docManagerEmail.isNotBlank() && !docManagerEmail.contains("placeholder")) {
+            docManagerEmail
+        } else {
+            (_verifiedAdminEmail.value ?: "").trim().lowercase()
+        }
+
+        return effectiveManagerEmail.isNotBlank() && userEmail == effectiveManagerEmail
     }
 
     fun complete3TierAdminAuthentication(
@@ -301,7 +387,7 @@ class MessViewModel(
                 )
                 _isOperationLoading.value = false
                 res.onSuccess {
-                    _isAdminAuthenticated.value = true
+                    grantAdminSessionForCurrentUser()
                     _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                         "অভিনন্দন! ৩-ধাপের সম্পূর্ণ নিরাপত্তা যাচাইকরণ সফল। আপনি এখন মেসের অ্যাডমিন।"
                     else
@@ -330,7 +416,7 @@ class MessViewModel(
                         } catch (e: Exception) {
                             android.util.Log.w("MessViewModel", "Notice syncing managerUid: ${e.message}")
                         }
-                        _isAdminAuthenticated.value = true
+                        grantAdminSessionForCurrentUser()
                         _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                             "স্বাগতম অ্যাডমিন! ৩-ধাপের নিরাপত্তা যাচাইকরণ সফল হয়েছে।"
                         else
@@ -398,7 +484,7 @@ class MessViewModel(
             )
             _isOperationLoading.value = false
             result.onSuccess {
-                _isAdminAuthenticated.value = true
+                grantAdminSessionForCurrentUser()
                 _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                     "অভিনন্দন! আপনি সফলভাবে মেস অ্যাডমিন/ম্যানেজার হিসেবে নিবন্ধিত হয়েছেন।"
                 else
@@ -433,7 +519,7 @@ class MessViewModel(
             _isOperationLoading.value = false
             res.onSuccess { matched ->
                 if (matched) {
-                    _isAdminAuthenticated.value = true
+                    grantAdminSessionForCurrentUser()
                     _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                         "স্বাগতম অ্যাডমিন! মেস ব্যবস্থাপনা সফলভাবে আনলক হয়েছে।"
                     else
@@ -441,10 +527,12 @@ class MessViewModel(
                     onSuccess()
                 } else {
                     _isAdminAuthenticated.value = false
+                    _verifiedAdminEmail.value = null
                     onFailure(if (_currentLanguage.value == Language.BENGALI) "ভুল অ্যাডমিন তথ্য!" else "Invalid admin credentials!")
                 }
             }.onFailure { err ->
                 _isAdminAuthenticated.value = false
+                _verifiedAdminEmail.value = null
                 onFailure(err.message ?: if (_currentLanguage.value == Language.BENGALI) "যাচাই ব্যর্থ হয়েছে" else "Verification failed")
             }
         }
@@ -465,7 +553,7 @@ class MessViewModel(
             _isOperationLoading.value = false
             res.onSuccess { matched ->
                 if (matched) {
-                    _isAdminAuthenticated.value = true
+                    grantAdminSessionForCurrentUser()
                     if (uid.isNotEmpty()) {
                         try {
                             repository.db.collection("messes").document(MessRepository.DEFAULT_MESS_ID)
@@ -480,7 +568,8 @@ class MessViewModel(
                                 messId = MessRepository.DEFAULT_MESS_ID,
                                 uid = uid,
                                 email = email,
-                                displayName = user?.displayName ?: email
+                                displayName = user?.displayName ?: email,
+                                role = "MANAGER"
                             )
                         } catch (e: Exception) {
                             android.util.Log.w("MessViewModel", "Notice binding manager: ${e.message}")
@@ -493,10 +582,12 @@ class MessViewModel(
                     onSuccess()
                 } else {
                     _isAdminAuthenticated.value = false
+                    _verifiedAdminEmail.value = null
                     onFailure(if (_currentLanguage.value == Language.BENGALI) "ভুল অ্যাডমিন পাসওয়ার্ড! প্রবেশাধিকার অস্বীকৃত।" else "Incorrect admin password! Access denied.")
                 }
             }.onFailure { err ->
                 _isAdminAuthenticated.value = false
+                _verifiedAdminEmail.value = null
                 onFailure(err.message ?: if (_currentLanguage.value == Language.BENGALI) "পাসওয়ার্ড যাচাই ব্যর্থ হয়েছে" else "Password verification failed")
             }
         }
@@ -543,7 +634,7 @@ class MessViewModel(
             )
             _isOperationLoading.value = false
             result.onSuccess {
-                _isAdminAuthenticated.value = true
+                grantAdminSessionForCurrentUser()
                 _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                     "অ্যাডমিন পাসওয়ার্ড সফলভাবে রিকভার ও আপডেট করা হয়েছে!"
                 else
@@ -551,6 +642,7 @@ class MessViewModel(
                 onSuccess()
             }.onFailure {
                 _isAdminAuthenticated.value = false
+                _verifiedAdminEmail.value = null
                 onFailure(it.message ?: "পাসওয়ার্ড রিকভারি ব্যর্থ হয়েছে")
             }
         }
@@ -672,19 +764,6 @@ class MessViewModel(
 
     fun saveMember(member: Member) {
         if (!requireAdminOrShowError()) return
-        val existing = membersState.value.firstOrNull { it.id == member.id }
-        if (existing != null) {
-            val isLocked = AntiCorruptionPolicy.isTimestampLocked(existing.updatedAt ?: existing.createdAt)
-            if (isLocked) {
-                if (member.cashDeposits < existing.cashDeposits || member.potDeposits < existing.potDeposits) {
-                    _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                        "🔒 ২৪ ঘণ্টা অতিক্রান্ত হওয়ায় পূর্ববর্তী জমা টাকা বা চাউল কমানো বা মুছা যাবে না! শুধুমাত্র নতুন জমা যোগ করা যাবে।"
-                    else
-                        "🔒 24 hours have passed! Prior deposits cannot be decreased. Only new additions are allowed."
-                    return
-                }
-            }
-        }
         viewModelScope.launch {
             _isOperationLoading.value = true
             val result = repository.saveMember(member)
@@ -721,9 +800,9 @@ class MessViewModel(
         val existingDaily = dailyMealsState.value.firstOrNull { it.date == date }
         if (AntiCorruptionPolicy.isMealLocked(existingDaily, date)) {
             _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                "🔒 ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! নিরাপত্তার স্বার্থে এই মিল শিটটি চিরতরে লক করা হয়েছে এবং আর কোনো তথ্য পরিবর্তন করা যাবে না।"
+                "🔒 আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! দুর্নীতি রোধের স্বার্থে এই দিনের মিল ডাটা অটো-ব্লক করা হয়েছে।"
             else
-                "🔒 24 hours have passed! This meal sheet is permanently locked for anti-corruption security."
+                "🔒 24 hours have passed since update! This day's meal data is auto-blocked."
             return
         }
         viewModelScope.launch {
@@ -766,9 +845,9 @@ class MessViewModel(
         val existingDaily = dailyMealsState.value.firstOrNull { it.date == date }
         if (AntiCorruptionPolicy.isMealLocked(existingDaily, date)) {
             _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                "🔒 ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! নিরাপত্তার স্বার্থে এই মিল শিটটি চিরতরে লক করা হয়েছে এবং আর কোনো তথ্য পরিবর্তন করা যাবে না।"
+                "🔒 আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! দুর্নীতি রোধের স্বার্থে এই দিনের মিল ডাটা অটো-ব্লক করা হয়েছে।"
             else
-                "🔒 24 hours have passed! This meal sheet is permanently locked for anti-corruption security."
+                "🔒 24 hours have passed since update! This day's meal data is auto-blocked."
             return
         }
         viewModelScope.launch {
@@ -822,9 +901,9 @@ class MessViewModel(
             val existing = expensesState.value.firstOrNull { it.id == expense.id }
             if (existing != null && AntiCorruptionPolicy.isExpenseLocked(existing)) {
                 _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                    "🔒 ২৪ ঘণ্টা অতিক্রান্ত হওয়ায় এই বাজার খরচের ভাউচারটি লক হয়ে গেছে। পরিবর্তন করা সম্ভব নয়।"
+                    "🔒 আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! দুর্নীতি রোধের স্বার্থে এই বাজার খরচটি অটো-ব্লক করা হয়েছে।"
                 else
-                    "🔒 24 hours have passed! This expense is locked and cannot be edited."
+                    "🔒 24 hours have passed since update! This expense is auto-blocked."
                 return
             }
         }
@@ -845,9 +924,9 @@ class MessViewModel(
         val existing = expensesState.value.firstOrNull { it.id == expenseId }
         if (existing != null && AntiCorruptionPolicy.isExpenseLocked(existing)) {
             _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                "🔒 ২৪ ঘণ্টা অতিক্রান্ত হওয়ায় এই বাজার খরচের ভাউচারটি লক হয়ে গেছে। এটি আর ডিলিট করা সম্ভব নয়।"
+                "🔒 আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! দুর্নীতি রোধের স্বার্থে এই বাজার খরচটি অটো-ব্লক করা হয়েছে।"
             else
-                "🔒 24 hours have passed! This expense is locked and cannot be deleted."
+                "🔒 24 hours have passed since update! This expense is auto-blocked."
             return
         }
         viewModelScope.launch {
@@ -896,9 +975,9 @@ class MessViewModel(
             val existing = eggRecordsState.value.firstOrNull { it.id == record.id }
             if (existing != null && AntiCorruptionPolicy.isEggRecordLocked(existing)) {
                 _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                    "🔒 ২৪ ঘণ্টা অতিক্রান্ত হওয়ায় এই ডিমের রেকর্ডটি লক হয়ে গেছে। পরিবর্তন করা সম্ভব নয়।"
+                    "🔒 আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! দুর্নীতি রোধের স্বার্থে এই ডিমের রেকর্ডটি অটো-ব্লক করা হয়েছে।"
                 else
-                    "🔒 24 hours have passed! This egg record is locked and cannot be edited."
+                    "🔒 24 hours have passed since update! This egg record is auto-blocked."
                 return
             }
         }
@@ -919,9 +998,9 @@ class MessViewModel(
         val existing = eggRecordsState.value.firstOrNull { it.id == recordId }
         if (existing != null && AntiCorruptionPolicy.isEggRecordLocked(existing)) {
             _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
-                "🔒 ২৪ ঘণ্টা অতিক্রান্ত হওয়ায় এই ডিমের হিসাবটি লক হয়ে গেছে। এটি আর ডিলিট করা সম্ভব নয়।"
+                "🔒 আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়েছে! দুর্নীতি রোধের স্বার্থে এই ডিমের রেকর্ডটি অটো-ব্লক করা হয়েছে।"
             else
-                "🔒 24 hours have passed! This egg record is locked and cannot be deleted."
+                "🔒 24 hours have passed since update! This egg record is auto-blocked."
             return
         }
         viewModelScope.launch {
@@ -987,6 +1066,12 @@ class MessViewModel(
             result.onSuccess {
                 // Instantly revoke former admin's authentication privileges in-app
                 _isAdminAuthenticated.value = false
+                _verifiedAdminEmail.value = null
+                _localMessOverride.value = _localMessOverride.value?.copy(
+                    managerEmail = cleanEmail,
+                    managerUid = genuineUid,
+                    adminPassword = if (newAdminPassword.isNullOrBlank()) "" else "configured"
+                )
                 _userMessage.value = if (_currentLanguage.value == Language.BENGALI)
                     "মাসিক ম্যানেজার হস্তান্তর সফল! নতুন ম্যানেজার: $cleanEmail। আপনার অ্যাডমিন ক্ষমতা প্রত্যাহার করা হয়েছে।"
                 else
@@ -1086,6 +1171,16 @@ class MessViewModel(
 
         viewModelScope.launch {
             _isOperationLoading.value = true
+            if (adminPasswordInput.isNotBlank()) {
+                val passRes = repository.verifyAdminPassword(messId, adminPasswordInput)
+                if (passRes.isFailure) {
+                    _isOperationLoading.value = false
+                    val errorMsg = if (_currentLanguage.value == Language.BENGALI) "ভুল অ্যাডমিন পাসওয়ার্ড!" else "Invalid admin password!"
+                    _userMessage.value = errorMsg
+                    onResult(false, errorMsg)
+                    return@launch
+                }
+            }
             val result = repository.resetMessDataWithBackup(messId, label)
             _isOperationLoading.value = false
             result.onSuccess {

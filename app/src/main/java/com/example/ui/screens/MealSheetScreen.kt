@@ -880,16 +880,16 @@ fun MealSheetScreen(
             icon = { Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFDC2626), modifier = Modifier.size(36.dp)) },
             title = {
                 Text(
-                    text = if (language == Language.BENGALI) "🔒 নিরাপত্তা লক: ২৪ ঘণ্টা অতিক্রান্ত" else "🔒 Security Locked: 24h Passed",
+                    text = if (language == Language.BENGALI) "🔒 দুর্নীতি রোধ: ২৪ ঘণ্টা পর অটো-ব্লক" else "🔒 Auto-Blocked: 24h Passed",
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
                     text = if (language == Language.BENGALI)
-                        "এই মিল শিটটি অন বা অফ করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়ে গেছে। দুর্নীতি রোধ ও নিরপেক্ষ হিসাবের স্বার্থে ২৪ ঘণ্টা পর ম্যানেজার সহ কারো আর এই তথ্য পরিবর্তন করার অনুমতি নেই।"
+                        "অ্যাডমিন ডাটা আপডেট করার পর ২৪ ঘণ্টা অতিক্রান্ত হয়ে গেছে। দুর্নীতি রোধ ও নিরপেক্ষ হিসাবের স্বার্থে এই দিনের ডাটা স্বয়ংক্রিয়ভাবে ব্লক করা হয়েছে। এটি আর পরিবর্তন করা যাবে না।"
                     else
-                        "24 hours have passed since this meal entry was set. For anti-corruption transparency, it cannot be modified by anyone.",
+                        "24 hours have passed since this day's data was updated. For anti-corruption transparency, it is auto-blocked and cannot be modified.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },

@@ -474,9 +474,9 @@ fun EggStockScreen(
                                     onClick = {
                                         if (isLocked) {
                                             lockedDialogMessage = if (language == Language.BENGALI)
-                                                "এই ডিমের হিসাবটি (${record.date}) ২৪ ঘণ্টার বেশি আগে এন্ট্রি বা আপডেট করা হয়েছিল। দুর্নীতি ও হিসাব পরিবর্তন রোধে ২৪ ঘণ্টা পর রেকর্ড স্থায়ীভাবে লক হয়ে যায়। এটি আর এডিট করা যাবে না।"
+                                                "এই ডিমের হিসাবটি (${record.date}) আপডেট করার পর ২৪ ঘণ্টা পার হয়ে গেছে। দুর্নীতি রোধের স্বার্থে এই রেকর্ডটি স্বয়ংক্রিয়ভাবে ব্লক করা হয়েছে। এটি আর এডিট করা যাবে না।"
                                             else
-                                                "This egg record (${record.date}) was logged over 24 hours ago. For anti-corruption protection, it is permanently locked and cannot be edited."
+                                                "This egg record (${record.date}) was updated over 24 hours ago. For anti-corruption protection, it is auto-blocked and cannot be edited."
                                             showLockedDialog = true
                                         } else {
                                             recordToEdit = record
@@ -497,9 +497,9 @@ fun EggStockScreen(
                                     onClick = {
                                         if (isLocked) {
                                             lockedDialogMessage = if (language == Language.BENGALI)
-                                                "এই ডিমের হিসাবটি (${record.date}) ২৪ ঘণ্টার বেশি আগে এন্ট্রি বা আপডেট করা হয়েছিল। দুর্নীতি ও হিসাব পরিবর্তন রোধে ২৪ ঘণ্টা পর রেকর্ড স্থায়ীভাবে লক হয়ে যায়। এটি আর মোছা যাবে না।"
+                                                "এই ডিমের হিসাবটি (${record.date}) আপডেট করার পর ২৪ ঘণ্টা পার হয়ে গেছে। দুর্নীতি রোধের স্বার্থে এই রেকর্ডটি স্বয়ংক্রিয়ভাবে ব্লক করা হয়েছে। এটি আর মোছা যাবে না।"
                                             else
-                                                "This egg record (${record.date}) was logged over 24 hours ago. For anti-corruption protection, it is permanently locked and cannot be deleted."
+                                                "This egg record (${record.date}) was updated over 24 hours ago. For anti-corruption protection, it is auto-blocked and cannot be deleted."
                                             showLockedDialog = true
                                         } else {
                                             recordToDelete = record
